@@ -75,6 +75,10 @@ The first proof uses the library's default LogDB. A custom multiplexed WAL is
 not built unless benchmark evidence identifies a material limitation that the
 default storage cannot address.
 
+The first evaluation is complete. ADR 0031 defers the evaluated Dragonboat v4
+development revision after the mandatory supportability gate failed. Its
+isolated functional proof remains evidence; it is not a production dependency.
+
 ## Consequences
 
 ### Positive
@@ -124,5 +128,7 @@ multi-tenancy, storage, operations, and failure engineering.
 
 - [Control-plane architecture RFC](../architecture/Control_Plane_Architecture_RFC.md)
 - [Data-plane architecture RFC](../design/Data_Plane_Architecture_RFC.md)
+- [ADR 0031: defer Dragonboat v4](0031-defer-dragonboat-v4.md)
+- [G1 proof results](../benchmarks/g1-dragonboat-v4/README.md)
 - [Dragonboat repository](https://github.com/lni/dragonboat)
 - [Dragonboat storage documentation](https://github.com/lni/dragonboat/blob/master/docs/storage.md)

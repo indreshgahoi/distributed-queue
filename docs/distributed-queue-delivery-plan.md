@@ -29,6 +29,8 @@ PostgreSQL queue generation in etcd, and the full Java regression remains green.
 
 ### G1 — Multi-Raft dependency approval gate
 
+Status: complete as a gate decision; Dragonboat v4 is deferred, not approved.
+
 Limitation solved: the project has a deterministic state machine but no
 supported replicated commit authority.
 
@@ -42,6 +44,26 @@ supported replicated commit authority.
 
 No production Dragonboat dependency is accepted while only the old v3 release
 line is stable and the required v4 API remains a moving development branch.
+
+Evidence: the pinned isolated proof passed leader/apply, quorum-loss, and local
+snapshot/restart tests and produced a proposal baseline. The mandatory
+supportability gate failed, so high-density, multi-volume, and fault-injection
+approval work remains intentionally unresolved. See
+[ADR 0031](adr/0031-defer-dragonboat-v4.md) and the
+[G1 evidence](benchmarks/g1-dragonboat-v4/README.md).
+
+### G1.1 — Resolve the consensus implementation
+
+Limitation solved: G1 proved the architecture boundary but found no approved
+production consensus dependency, so G2 still has no supported commit authority.
+
+- re-evaluate Dragonboat when a supported v4 release and upgrade policy exist,
+  or evaluate another candidate against the same gate;
+- price the storage, transport, snapshot, and Multi-Raft host work explicitly
+  for consensus-core-only candidates;
+- complete density, multi-volume, power-loss, snapshot-install, and sustained
+  workload evidence before approval;
+- record exactly one accepted dependency decision before starting G2.
 
 ### G2 — One real replicated partition
 

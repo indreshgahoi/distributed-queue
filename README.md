@@ -17,7 +17,8 @@ placement, plus the first Go target-runtime foundation.
 **Target architecture implementation:** Go control-plane and deterministic
 data-plane foundations. PostgreSQL commits queue metadata and an append-only
 outbox atomically; a logical-replication projector publishes monotonic desired
-state to etcd without polling. Multi-Raft integration is not implemented yet.
+state to etcd without polling. The first Dragonboat v4 dependency gate is
+complete and deferred; Multi-Raft integration is not implemented yet.
 
 The [v0.29 HLD](docs/design/v0.29-replica-membership-hld.md),
 [LLD](docs/design/v0.29-replica-membership-lld.md), and
@@ -62,6 +63,18 @@ complete, durable replica set before automatic replication is introduced.
 - PostgreSQL logical replication to version-monotonic etcd projections;
 - rack-aware initial placement policy;
 - deployable Go metadata API and coordination projector containers.
+
+### Experimental consensus evidence
+
+- isolated, exactly pinned Dragonboat v4 proof module;
+- real three-replica leader election and deterministic apply result;
+- rejection of proposals after quorum loss;
+- local snapshot, close, restart, and state restoration proof;
+- checked-in three-sample synchronous proposal benchmark.
+
+This evidence does not make Dragonboat a production dependency. The evaluated
+v4 line is still development code and is deferred by
+[ADR 0031](docs/adr/0031-defer-dragonboat-v4.md).
 
 ## What is not guaranteed yet
 
@@ -126,7 +139,9 @@ Dragonboat is the leading Multi-Raft candidate, but it is not yet an accepted
 or integrated dependency. It must first pass the release-support, durability,
 snapshot, recovery, storage, and group-density gates in
 [ADR 0030](docs/adr/0030-go-target-runtime-and-consensus-gate.md). The project
-will not implement a custom Raft algorithm.
+will not implement a custom Raft algorithm. The first pinned v4 evaluation
+passed its narrow functional proof but failed the mandatory supportability
+gate; [ADR 0031](docs/adr/0031-defer-dragonboat-v4.md) records the defer decision.
 
 Detailed designs:
 
@@ -172,8 +187,8 @@ become a substitute for node-coordinated consensus.
 
 ## Quick start
 
-Prerequisites: Java 21, Maven, Docker, and Docker Compose v2. Go 1.25 is needed
-only when building or testing the Go modules directly outside Docker.
+Prerequisites: Java 21, Maven, Docker, and Docker Compose v2. Go 1.27.1 is
+needed only when building or testing the Go modules directly outside Docker.
 
 ```bash
 docker compose up --detach --build
@@ -210,24 +225,26 @@ curl --request POST \
 
 ## Current milestone
 
-v0.29 closed the control-plane gap where follower transport existed but the
-system could not say which nodes were authoritative members of a partition.
-Queue creation now records the requested replication factor. Placement waits
-for enough live distinct nodes, publishes the full member set atomically, and
-uses per-member fenced provisioning. PostgreSQL remains outside message append
-and commit; membership does not imply that data is caught up or quorum committed.
+G1 evaluated an exact Dragonboat v4 development revision without contaminating
+the production Go module. Its three-replica apply, quorum-loss, snapshot, and
+restart proofs pass, and a local proposal baseline is recorded. The candidate
+is not approved because the required v4 line is not a supported stable release;
+power-loss durability, snapshot transfer, stable multi-volume binding, and
+high-density behavior therefore remain unresolved rather than assumed.
 
-The next milestone is the Multi-Raft dependency proof: select a supportable
-library version and verify quorum completion, durable recovery, snapshot
-behavior, stable volume binding, and many-group resource use before integrating
-the first three-node replicated partition.
+The next milestone is G1.1: resolve the consensus implementation by either
+re-running the complete gate against a supported Dragonboat v4 release or
+evaluating an alternative with the full Multi-Raft host cost included. G2, the
+first real replicated queue partition, begins only after one candidate passes.
 
 ## Roadmap
 
 ```text
 v0.29  replica membership + Go control-plane/state-machine foundation
   ↓
-multi-Raft library approval gate and storage benchmark
+G1 pinned Dragonboat v4 proof → deferred at supportability gate
+  ↓
+G1.1 supported consensus implementation decision
   ↓
 Go queue-node with one replicated partition
   ↓
@@ -259,6 +276,8 @@ The detailed phases and issue-ready backlog are in the
 | [Storage architecture](docs/design/storage-architecture.md) | Current storage internals and phased distributed evolution |
 | [Target architecture](docs/distributed-queue-target-architecture.md) | Long-term distributed design |
 | [Delivery plan](docs/distributed-queue-delivery-plan.md) | Milestones and implementation order |
+| [G1 decision](docs/adr/0031-defer-dragonboat-v4.md) | Why the evaluated Dragonboat v4 revision is deferred |
+| [G1 evidence](docs/benchmarks/g1-dragonboat-v4/README.md) | Reproducible proof and benchmark results |
 | [ADRs](docs/adr) | Accepted and proposed architectural decisions |
 | [Diagrams](docs/diagrams/README.md) | Runtime and protocol flows |
 | [Engineering guidelines](docs/engineering-guidelines.md) | Code, naming, testing, and logging conventions |

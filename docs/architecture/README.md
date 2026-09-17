@@ -29,6 +29,10 @@ Milestone-specific designs:
   target guarantees.
 - [ADR 0030: Go target runtime and consensus gate](../adr/0030-go-target-runtime-and-consensus-gate.md)
   — language migration, Java retention, and the Dragonboat approval boundary.
+- [ADR 0031: defer Dragonboat v4](../adr/0031-defer-dragonboat-v4.md) — G1
+  executable evidence, failed supportability gate, and the next decision point.
+- [G1 Dragonboat proof results](../benchmarks/g1-dragonboat-v4/README.md) —
+  reproducible functional and proposal-baseline evidence with explicit limits.
 - [Storage architecture](../design/storage-architecture.md) — current files,
   recovery authority, and phased evolution to replicated storage.
 - [v0.28 high-level design](../design/v0.28-durable-log-hld.md)
