@@ -4,6 +4,93 @@ This plan converts the target architecture into reviewable milestones. Each
 phase follows: semantics, invariants, failure scenarios, tests, implementation,
 regression tests, documentation, commit, and release.
 
+## Current Go target-runtime plan
+
+[ADR 0030](adr/0030-go-target-runtime-and-consensus-gate.md) supersedes the
+uncompleted Java/Ratis direction below. The older numbered phases remain in
+this document as history for the Java baseline; they are not the active order
+for new distributed-runtime work.
+
+### G0 — Authority and deterministic-domain foundation
+
+Status: implemented; distributed data-plane claims remain explicitly disabled.
+
+- Go module and project-owned control/data-plane boundaries;
+- deterministic partition commands and snapshots;
+- signed partition-aware receipts and stable routing;
+- atomic PostgreSQL catalog, idempotency record, and append-only outbox;
+- PostgreSQL logical replication to monotonic etcd projections without polling;
+- deployable metadata API and coordination projector;
+- real PostgreSQL/etcd integration tests and local Compose stack.
+
+Exit evidence: Go tests and vet pass, adapter integration tests pass against
+real dependencies, container images build, stack smoke test observes the exact
+PostgreSQL queue generation in etcd, and the full Java regression remains green.
+
+### G1 — Multi-Raft dependency approval gate
+
+Limitation solved: the project has a deterministic state machine but no
+supported replicated commit authority.
+
+- pin and record an exact candidate version or commit;
+- prove proposal completion means majority-durable commit plus apply;
+- prove restart, log repair, snapshot, compaction, and installation behavior;
+- measure idle and active group density, startup recovery, file descriptors,
+  memory, disk amplification, and publish percentiles;
+- prove stable volume binding and clean containment behind `consensus.Group`;
+- decide accept, fork, choose another library, or defer with evidence.
+
+No production Dragonboat dependency is accepted while only the old v3 release
+line is stable and the required v4 API remains a moving development branch.
+
+### G2 — One real replicated partition
+
+Limitation solved: current Go operations cross only a local test adapter.
+
+- run one partition on three queue-node processes;
+- commit publish, claim, ACK, NACK, expiry, and DLQ transitions through Raft;
+- acknowledge only the consensus adapter's documented durable completion;
+- restore from Raft snapshot plus retained log;
+- verify leader crash before and after client acknowledgement.
+
+### G3 — Multi-group node runtime and control-plane watches
+
+Limitation solved: one replicated group does not support many tenant queues.
+
+- register fenced node incarnations and volume inventory in etcd;
+- consume desired placement with list-at-revision plus watch-from-next-revision;
+- host many groups through shared transport, storage, and schedulers;
+- preserve stable replica-to-volume binding across restart and config reorder;
+- add per-tenant and per-volume admission/fairness limits.
+
+### G4 — Gateway and multi-partition queue
+
+Limitation solved: customers cannot use a stable endpoint or scale a queue
+beyond one partition.
+
+- publish versioned routes through etcd;
+- route keyed and unkeyed publish deterministically;
+- use bounded, fair receive probes rather than full partition fan-out;
+- route ACK/NACK directly from signed receipt lineage;
+- retry only outcomes proven safe by command idempotency.
+
+### G5 — Repair, membership change, and operational hardening
+
+Limitation solved: the system cannot yet replace failed replicas or demonstrate
+bounded recovery under correlated failures.
+
+- snapshot transfer and learner catch-up;
+- safe membership change and promotion eligibility;
+- node drain, disk drain, and permanent replica replacement;
+- network partition, disk-full, corruption, slow-follower, and repeated-crash
+  fault injection;
+- SLO dashboards, retained-WAL safety limits, backup/restore, and runbooks.
+
+Each phase has a benchmark gate when it changes fsync, network quorum, snapshot
+I/O, group density, recovery load, hot-path routing, or fairness.
+
+## Historical Java delivery plan
+
 ## Phase 0 — Close v0.27 Honestly
 
 Goal: finish bounded transport without implying automatic replication.
@@ -57,8 +144,18 @@ Exit criterion: restart and snapshot plus WAL recovery reproduce
 
 ## Phase 3 — v0.29: Replica Membership and Placement
 
+Status: implemented and verified.
+
 Limitation solved: the system cannot identify which nodes should store a
 partition, so v0.27 cannot schedule replication safely.
+
+Design review:
+[problem and proposed solution](design/v0.29-replica-membership-problem-and-solution.md),
+[HLD](design/v0.29-replica-membership-hld.md),
+[LLD](design/v0.29-replica-membership-lld.md),
+[semantics](design/v0.29-replica-membership-semantics.md),
+[failure scenarios](design/v0.29-replica-membership-failure-scenarios.md), and
+[ADR 0028](adr/0028-immutable-initial-replica-membership.md).
 
 - add queue-generation replication factor, default three;
 - model voter versus learner replicas;
@@ -183,8 +280,8 @@ Create one GitHub milestone per phase and one issue per bullet group below.
 
 1. Add replication factor to queue-generation metadata.
 2. Model voter and learner replica membership.
-3. Implement failure-domain-aware initial replica placement.
-4. Add node replica reconciliation and local replica catalog.
+3. Implement distinct-node, least-loaded initial replica placement.
+4. Add per-member fenced provisioning and activation after all members are ready.
 5. Expose membership inspection APIs and operational logs.
 
 ### v0.30

@@ -58,6 +58,60 @@ services:
     volumes:
       - queue-node-data:/var/lib/distributed-queue
 
+  queue-node-2:
+    build:
+      context: .
+      dockerfile: queue-node/Dockerfile
+    depends_on:
+      metadata-service:
+        condition: service_started
+    environment:
+      QUEUE_NODE_ID: local-node-2
+      QUEUE_NODE_ENDPOINT: http://queue-node-2:8081
+      METADATA_SERVICE_URL: http://metadata-service:8080
+      QUEUE_STORAGE_ROOT: /var/lib/distributed-queue
+      NODE_REGISTRATION_LEASE_DURATION: PT30S
+      NODE_HEARTBEAT_DELAY: PT10S
+      PROVISIONING_LEASE_DURATION: PT30S
+      PROVISIONING_POLL_DELAY: PT1S
+      RUNTIME_PARTITION_POLL_DELAY: PT1S
+      QUEUE_MAX_MESSAGE_BYTES: 262144
+      QUEUE_MAX_RETAINED_MESSAGES: 100000
+      QUEUE_MAX_RETAINED_BYTES: 1073741824
+      QUEUE_NODE_PORT: 8081
+    ports:
+      - "8083:8081"
+    restart: unless-stopped
+    volumes:
+      - queue-node-2-data:/var/lib/distributed-queue
+
+  queue-node-3:
+    build:
+      context: .
+      dockerfile: queue-node/Dockerfile
+    depends_on:
+      metadata-service:
+        condition: service_started
+    environment:
+      QUEUE_NODE_ID: local-node-3
+      QUEUE_NODE_ENDPOINT: http://queue-node-3:8081
+      METADATA_SERVICE_URL: http://metadata-service:8080
+      QUEUE_STORAGE_ROOT: /var/lib/distributed-queue
+      NODE_REGISTRATION_LEASE_DURATION: PT30S
+      NODE_HEARTBEAT_DELAY: PT10S
+      PROVISIONING_LEASE_DURATION: PT30S
+      PROVISIONING_POLL_DELAY: PT1S
+      RUNTIME_PARTITION_POLL_DELAY: PT1S
+      QUEUE_MAX_MESSAGE_BYTES: 262144
+      QUEUE_MAX_RETAINED_MESSAGES: 100000
+      QUEUE_MAX_RETAINED_BYTES: 1073741824
+      QUEUE_NODE_PORT: 8081
+    ports:
+      - "8084:8081"
+    restart: unless-stopped
+    volumes:
+      - queue-node-3-data:/var/lib/distributed-queue
+
   queue-gateway:
     build:
       context: .
@@ -66,6 +120,10 @@ services:
       metadata-service:
         condition: service_started
       queue-node:
+        condition: service_started
+      queue-node-2:
+        condition: service_started
+      queue-node-3:
         condition: service_started
     environment:
       METADATA_SERVICE_URL: http://metadata-service:8080
@@ -79,3 +137,5 @@ services:
 volumes:
   queue-metadata-postgres:
   queue-node-data:
+  queue-node-2-data:
+  queue-node-3-data:

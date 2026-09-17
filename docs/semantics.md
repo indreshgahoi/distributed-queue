@@ -2745,3 +2745,54 @@ index exceeds locally durable history.
 v0.28 does not provide automatic replica membership, majority commit, leader
 election, promotion, divergent-suffix repair, or snapshot transfer. Local queue
 acknowledgement still means local durability, not voting-majority durability.
+
+## v0.29.0 — Immutable Initial Replica Membership
+
+### G244 — Replication factor is durable queue-generation metadata
+
+Queue creation accepts a replication factor from one through seven and defaults
+to three when omitted. It participates in idempotency comparison. Retrying an
+idempotency key with a different factor is a conflict.
+
+### G245 — Initial membership is complete or absent
+
+The metadata service publishes a replica group only when at least the requested
+number of distinct, live nodes exists. If capacity is insufficient, the group
+remains `PENDING_CAPACITY` with no member rows and no bootstrap leader.
+
+### G246 — Initial placement is atomic and deterministic
+
+One PostgreSQL transaction locks a pending group, selects the least-loaded live
+nodes with node ID as the stable tie-break, inserts every voter, selects the
+first voter as bootstrap leader, and moves the group to `PROVISIONING`.
+Concurrent planners skip groups already locked. Exact global balance is not a
+guarantee.
+
+### G247 — Membership and node incarnations fence provisioning
+
+Provisioning claims are scoped to queue, generation, partition, member node,
+membership version, node registration epoch, and fencing token. A stale claim,
+expired lease, replaced node process, or changed membership cannot report
+successful provisioning.
+
+### G248 — Queue activation requires every initial replica
+
+Each member independently materializes lineage-bound local storage. The replica
+group and queue become `ACTIVE` only after all members in the current membership
+have reported `READY` under current live node registrations. One member failure
+moves the group and queue to `PROVISIONING_FAILED`.
+
+### G249 — Desired membership is inspectable
+
+Trusted internal APIs expose complete replica groups and desired assignments
+for one current live node incarnation. Assignment lookup for stale or expired
+node authority fails closed.
+
+### Explicit non-guarantees
+
+v0.29 does not copy queue records to assigned replicas, measure catch-up,
+acknowledge by majority, elect a leader, replace failed members, transfer
+snapshots, or mutate membership after bootstrap. The bootstrap leader is a
+startup designation, not consensus-elected authority. `ACTIVE` proves that
+initial local storage was materialized; it does not prove replicated data or a
+quorum durability boundary.

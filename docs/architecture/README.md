@@ -21,11 +21,25 @@ and implementation order is in the
 
 Milestone-specific designs:
 
+- [Go control-plane architecture RFC](Control_Plane_Architecture_RFC.md) —
+  PostgreSQL authority, logical-replication outbox, etcd coordination, and
+  failure boundaries.
+- [Go data-plane architecture RFC](../design/Data_Plane_Architecture_RFC.md) —
+  deterministic state machine, multi-Raft boundary, storage, routing, and
+  target guarantees.
+- [ADR 0030: Go target runtime and consensus gate](../adr/0030-go-target-runtime-and-consensus-gate.md)
+  — language migration, Java retention, and the Dragonboat approval boundary.
 - [Storage architecture](../design/storage-architecture.md) — current files,
   recovery authority, and phased evolution to replicated storage.
 - [v0.28 high-level design](../design/v0.28-durable-log-hld.md)
 - [v0.28 low-level design](../design/v0.28-durable-log-lld.md)
 - [ADR 0027: durable logical replicated log](../adr/0027-durable-logical-replicated-log.md)
+- [v0.29 problem and proposed solution](../design/v0.29-replica-membership-problem-and-solution.md)
+- [v0.29 high-level design](../design/v0.29-replica-membership-hld.md)
+- [v0.29 low-level design](../design/v0.29-replica-membership-lld.md)
+- [v0.29 semantics](../design/v0.29-replica-membership-semantics.md)
+- [v0.29 failure scenarios](../design/v0.29-replica-membership-failure-scenarios.md)
+- [ADR 0028: immutable initial replica membership](../adr/0028-immutable-initial-replica-membership.md)
 
 ## Living-document rules
 

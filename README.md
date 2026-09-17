@@ -1,27 +1,32 @@
-# Distributed Queue in Java
+# Distributed Queue
 
-A Java 21 queue built incrementally to study the correctness mechanisms behind
-durable distributed systems: state machines, leases, write-ahead logging,
-snapshots, fencing, routing, replication, and failure recovery.
+A durable queue built incrementally to study the correctness mechanisms behind
+distributed systems: state machines, leases, write-ahead logging, snapshots,
+fencing, routing, replication, consensus, and failure recovery. The existing
+Java 21 system remains the semantic and storage baseline while the target
+multi-Raft architecture is implemented in Go.
 
 This is a learning and architecture project, not a production-ready message
 broker or an attempt to copy every feature of an existing queue.
 
 ## Project status
 
-**Latest release:** v0.27.0 — bounded follower transport and one-cycle catch-up.
+**Latest release:** v0.29.0 — immutable initial replica membership and
+placement, plus the first Go target-runtime foundation.
 
-**Current development:** v0.28.0 implementation — durable logical replicated
-log.
+**Target architecture implementation:** Go control-plane and deterministic
+data-plane foundations. PostgreSQL commits queue metadata and an append-only
+outbox atomically; a logical-replication projector publishes monotonic desired
+state to etcd without polling. Multi-Raft integration is not implemented yet.
 
-The [v0.28 HLD](docs/design/v0.28-durable-log-hld.md),
-[LLD](docs/design/v0.28-durable-log-lld.md), and
-[ADR 0027](docs/adr/0027-durable-logical-replicated-log.md) define the logical
-index, term, hard-state, snapshot, recovery, and one-force batch boundaries.
-The implementation is based on the checked-in
-[v0.27.1 performance baseline](docs/benchmarks/v0.27.1/README.md).
+The [v0.29 HLD](docs/design/v0.29-replica-membership-hld.md),
+[LLD](docs/design/v0.29-replica-membership-lld.md), and
+[ADR 0028](docs/adr/0028-immutable-initial-replica-membership.md) define a
+complete, durable replica set before automatic replication is introduced.
 
 ## What works today
+
+### Java baseline
 
 - FIFO publication within one local partition;
 - receipt-handle ACK and NACK;
@@ -39,22 +44,105 @@ The implementation is based on the checked-in
 - bounded follower HTTP batches and resumable one-cycle catch-up;
 - durable logical index and term in segmented-WAL frames;
 - one-force follower durability groups and replica hard state;
-- snapshot logical boundaries that survive reclaimed WAL prefixes.
+- snapshot logical boundaries that survive reclaimed WAL prefixes;
+- configurable replica factor with a default of three;
+- atomic, distinct-node replica placement with deterministic load tie-breaking;
+- per-replica fenced provisioning and inspectable desired assignments;
+- activation only after every initial replica has materialized local storage.
+
+### Go target-architecture foundation
+
+- deterministic partition command application with lineage and schema checks;
+- publish, claim, ACK, NACK, lease expiry, delayed delivery, and DLQ transitions;
+- bounded producer deduplication and command-result replay;
+- deterministic snapshots with logical index and term boundaries;
+- project-owned consensus port plus an explicitly non-distributed local adapter;
+- atomic PostgreSQL queue, idempotency, and outbox transactions;
+- append-only outbox enforcement in PostgreSQL;
+- PostgreSQL logical replication to version-monotonic etcd projections;
+- rack-aware initial placement policy;
+- deployable Go metadata API and coordination projector containers.
 
 ## What is not guaranteed yet
 
-- no automatic replica placement or replication scheduler;
+- no automatic replication scheduler or follower catch-up loop;
 - no majority-quorum acknowledgement;
 - no node-coordinated leader election;
 - no automatic follower promotion or divergent-log repair;
 - no snapshot transfer between nodes;
 - no multi-partition customer queue;
+- no Go multi-Raft adapter or replicated Go queue node yet;
+- no Go gateway or revision-safe etcd watch consumer yet;
 - internal service endpoints are not authenticated;
 - no claim of production availability, security, or operational maturity.
 
 A follower copy is durable local storage, but it is not yet a committed replica.
 
 ## Architecture
+
+### Target architecture
+
+The target system separates administrative authority from message durability:
+
+```mermaid
+flowchart TB
+    Admin[Administrative client] --> API[Go metadata API]
+    API -->|atomic metadata + outbox| PG[(PostgreSQL)]
+    PG -->|pgoutput logical replication| Projector[Go CDC projector]
+    Projector -->|monotonic desired state| Etcd[(etcd)]
+
+    Producer[Producer or consumer] --> Gateway[Future Go gateway]
+    Etcd -. revision-safe watches .-> Gateway
+    Etcd -. desired membership .-> NodeA[Queue node A]
+    Etcd -. desired membership .-> NodeB[Queue node B]
+    Etcd -. desired membership .-> NodeC[Queue node C]
+
+    Gateway -->|partition command| NodeA
+    NodeA <-->|Raft replication| NodeB
+    NodeA <-->|Raft replication| NodeC
+```
+
+PostgreSQL is control-plane authority. etcd is a rebuildable coordination view.
+Neither is message commit authority; that role belongs to each partition's
+future Raft group. One queue generation contains one or more partitions, and
+each partition becomes an independent Raft group, normally with three replicas.
+A mutation succeeds only after the partition's Raft majority durably commits
+it; the deterministic queue state machine then applies committed commands in
+log order.
+
+```text
+tenant / queue / generation
+            |
+            +-- partition 0 -> Raft group 1001 -> replicas A, B, C
+            +-- partition 1 -> Raft group 1002 -> replicas B, C, D
+            +-- partition 2 -> Raft group 1003 -> replicas C, D, A
+
+Each queue node hosts many groups from many tenants through one bounded
+Multi-Raft runtime, shared transport, and volume-aware durable storage.
+```
+
+The target runtime is being built in Go behind a project-owned consensus port.
+Dragonboat is the leading Multi-Raft candidate, but it is not yet an accepted
+or integrated dependency. It must first pass the release-support, durability,
+snapshot, recovery, storage, and group-density gates in
+[ADR 0030](docs/adr/0030-go-target-runtime-and-consensus-gate.md). The project
+will not implement a custom Raft algorithm.
+
+Detailed designs:
+
+- [Control-plane architecture](docs/architecture/Control_Plane_Architecture_RFC.md)
+- [Data-plane architecture](docs/design/Data_Plane_Architecture_RFC.md)
+- [Partitioned Multi-Raft design](docs/design/v0.30-partitioned-multiraft-design.md)
+- [Delivery plan](docs/distributed-queue-delivery-plan.md)
+
+### Current implementation
+
+Today, only the solid PostgreSQL-to-etcd control-plane path and the
+deterministic Go state machine exist from the target diagram. The Raft links,
+Go queue nodes, and Go gateway are future work. The local consensus adapter is
+a test seam and provides no distributed guarantee.
+
+The currently runnable Java baseline is:
 
 ```mermaid
 flowchart LR
@@ -74,6 +162,9 @@ flowchart LR
 | `queue-node` | Partition reconciliation, local storage runtime, internal data plane, and follower transport |
 | `queue-gateway` | Stable customer endpoint and READY-authority routing |
 | `queue-benchmarks` | JMH performance experiments and checked-in evidence |
+| `cmd/metadata-api` | Go queue-metadata write API backed by PostgreSQL |
+| `cmd/coordination-projector` | Go PostgreSQL CDC-to-etcd projector |
+| `internal/dataplane` | Go deterministic state machine and consensus boundary |
 
 The metadata service and gateway use ports-and-adapters boundaries. PostgreSQL
 is control-plane authority; it is not in the message commit path and will not
@@ -81,7 +172,8 @@ become a substitute for node-coordinated consensus.
 
 ## Quick start
 
-Prerequisites: Java 21, Maven, Docker, and Docker Compose v2.
+Prerequisites: Java 21, Maven, Docker, and Docker Compose v2. Go 1.25 is needed
+only when building or testing the Go modules directly outside Docker.
 
 ```bash
 docker compose up --detach --build
@@ -104,39 +196,46 @@ Detailed startup, API examples, configuration, reset procedures, and
 troubleshooting are in the
 [local development runbook](docs/runbooks/local-development.md).
 
+To run only the new Go control-plane foundation:
+
+```bash
+docker compose -f compose.go.yaml up --detach --build
+
+curl --request POST \
+  http://localhost:18080/v1/tenants/acme/queues \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: create-orders-001' \
+  --data '{"name":"orders","partitionCount":4}'
+```
+
 ## Current milestone
 
-v0.28 addresses the correctness gap where follower sequence depended on
-counting retained WAL records and therefore failed after snapshot-authorized
-prefix reclamation.
+v0.29 closed the control-plane gap where follower transport existed but the
+system could not say which nodes were authoritative members of a partition.
+Queue creation now records the requested replication factor. Placement waits
+for enough live distinct nodes, publishes the full member set atomically, and
+uses per-member fenced provisioning. PostgreSQL remains outside message append
+and commit; membership does not imply that data is caught up or quorum committed.
 
-The implementation:
-
-- stores `logIndex`, `logTerm`, and `WalRecord` in every replicated WAL frame;
-- retains `WalPosition` as the separate physical recovery boundary;
-- binds snapshots to logical index/term and physical position;
-- persists replica term, vote, and commit hard state;
-- writes a validated bounded batch followed by one `force(true)`;
-- recovers a complete prefix and poisons the writer after ambiguous I/O failure.
-
-It deliberately does not add quorum commit, election, membership, or promotion.
+The next milestone is the Multi-Raft dependency proof: select a supportable
+library version and verify quorum completion, durable recovery, snapshot
+behavior, stable volume binding, and many-group resource use before integrating
+the first three-node replicated partition.
 
 ## Roadmap
 
 ```text
-v0.28  durable logical replicated log
+v0.29  replica membership + Go control-plane/state-machine foundation
   ↓
-v0.29  replica membership and placement
+multi-Raft library approval gate and storage benchmark
   ↓
-v0.30  automatic catch-up and learner bootstrap
+Go queue-node with one replicated partition
   ↓
-v0.31  majority commit and committed-only apply
+multi-group hosting, stable volume binding, and snapshots
   ↓
-v0.32  node-coordinated leader election
+gateway routing, revision-safe watches, and multi-partition receive
   ↓
-v0.33  safe promotion and replica repair
-  ↓
-later  multi-partition queue semantics
+failure injection, quorum-loss recovery, and capacity/fairness controls
 ```
 
 Every milestone follows:

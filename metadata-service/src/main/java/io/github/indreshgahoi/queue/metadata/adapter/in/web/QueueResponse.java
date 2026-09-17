@@ -19,6 +19,8 @@ public record QueueResponse(
         UUID generationId,
         @Schema(example = "1")
         int partitionCount,
+        @Schema(example = "3")
+        int replicationFactor,
         @Schema(example = "PROVISIONING")
         QueueLifecycleState lifecycleState,
         @Schema(example = "0")
@@ -35,6 +37,7 @@ public record QueueResponse(
                 descriptor.queueId(),
                 descriptor.generationId(),
                 descriptor.partitionCount(),
+                descriptor.replicationFactor(),
                 descriptor.lifecycleState(),
                 descriptor.metadataVersion(),
                 descriptor.createdAt(),

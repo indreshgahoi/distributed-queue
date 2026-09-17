@@ -976,3 +976,38 @@ replica hard state, and make a validated follower batch one force group.
 - leader election, promotion eligibility, and divergent suffix truncation;
 - snapshot transfer and automatic replica replacement;
 - persistent sparse indexes and cross-partition asynchronous group commit.
+
+## v0.29.0 — Immutable Initial Replica Membership
+
+### Decision
+
+Store one replica-group row and one row per member in PostgreSQL. Default new
+queues to three voting replicas, publish the full initial set atomically across
+distinct live nodes, keep that set immutable in this milestone, and provision
+each member through its own lease- and token-fenced claim.
+
+### Gain
+
+- every partition has one durable, inspectable desired replica set;
+- insufficient capacity cannot expose a misleading partial configuration;
+- independent nodes can materialize replica storage concurrently;
+- membership version and node registration epoch reject stale completion;
+- later catch-up workers can discover follower identities from metadata;
+- PostgreSQL remains outside the message replication and commit path.
+
+### Cost
+
+- the old single placement remains temporarily as a bootstrap-leader
+  compatibility view for routing and the existing runtime manager;
+- node load is desired-replica count, not disk, traffic, or failure-domain load;
+- readiness proves storage materialization only, not log equality;
+- membership cannot yet heal permanent node loss;
+- PostgreSQL availability is required for new placement and assignment refresh.
+
+### Deferred
+
+- automatic leader-to-follower catch-up and lag tracking;
+- learner bootstrap, snapshot transfer, and recovery rate limiting;
+- majority commit and committed-only state-machine application;
+- node-coordinated election and safe membership changes;
+- failure-domain-aware placement and automatic replica replacement.

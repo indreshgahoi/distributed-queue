@@ -69,14 +69,14 @@ public final class ProvisioningReconciler
         log.info(
                 "event=provisioning_claim_acquired queueId={} "
                         + "generationId={} partitionId={} workerId={} "
-                        + "registrationEpoch={} placementEpoch={} "
+                        + "registrationEpoch={} membershipVersion={} "
                         + "fencingToken={} leaseExpiresAt={}",
                 assignment.queueId(),
                 assignment.generationId(),
                 assignment.partitionId(),
                 assignment.workerId(),
                 assignment.registrationEpoch(),
-                assignment.placementEpoch(),
+                assignment.membershipVersion(),
                 assignment.fencingToken(),
                 assignment.leaseExpiresAt()
         );
@@ -86,14 +86,14 @@ public final class ProvisioningReconciler
             log.info(
                     "event=provisioning_completed queueId={} "
                             + "generationId={} partitionId={} workerId={} "
-                            + "registrationEpoch={} placementEpoch={} "
+                            + "registrationEpoch={} membershipVersion={} "
                             + "fencingToken={}",
                     assignment.queueId(),
                     assignment.generationId(),
                     assignment.partitionId(),
                     assignment.workerId(),
                     assignment.registrationEpoch(),
-                    assignment.placementEpoch(),
+                    assignment.membershipVersion(),
                     assignment.fencingToken()
             );
             return true;

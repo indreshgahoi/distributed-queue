@@ -69,14 +69,14 @@ final class QueueMetadataService
         claimed.ifPresent(claim -> log.info(
                 "event=provisioning_claim_granted queueId={} "
                         + "generationId={} partitionId={} workerId={} "
-                        + "registrationEpoch={} placementEpoch={} "
+                        + "registrationEpoch={} membershipVersion={} "
                         + "fencingToken={} leaseExpiresAt={}",
                 claim.identity().queueId(),
                 claim.identity().generationId(),
                 claim.identity().partitionId(),
                 claim.identity().workerId(),
                 claim.identity().registrationEpoch(),
-                claim.identity().placementEpoch(),
+                claim.identity().membershipVersion(),
                 claim.identity().fencingToken(),
                 claim.leaseExpiresAt()
         ));
@@ -134,36 +134,6 @@ final class QueueMetadataService
                 queue.metadataVersion()
         );
         return queue;
-    }
-
-    public QueueDescriptor completeProvisioning(
-            QueueDescriptor expected
-    ) {
-        return transition(
-                expected,
-                QueueLifecycleState.PROVISIONING,
-                QueueLifecycleState.ACTIVE
-        );
-    }
-
-    public QueueDescriptor failProvisioning(
-            QueueDescriptor expected
-    ) {
-        return transition(
-                expected,
-                QueueLifecycleState.PROVISIONING,
-                QueueLifecycleState.PROVISIONING_FAILED
-        );
-    }
-
-    public QueueDescriptor retryProvisioning(
-            QueueDescriptor expected
-    ) {
-        return transition(
-                expected,
-                QueueLifecycleState.PROVISIONING_FAILED,
-                QueueLifecycleState.PROVISIONING
-        );
     }
 
     public QueueDescriptor completeDeletion(
@@ -235,7 +205,7 @@ final class QueueMetadataService
         log.info(
                 "event={} queueId={} generationId={} partitionId={} "
                         + "workerId={} registrationEpoch={} "
-                        + "placementEpoch={} fencingToken={} state={} "
+                        + "membershipVersion={} fencingToken={} state={} "
                         + "metadataVersion={}",
                 event,
                 claim.queueId(),
@@ -243,7 +213,7 @@ final class QueueMetadataService
                 claim.partitionId(),
                 claim.workerId(),
                 claim.registrationEpoch(),
-                claim.placementEpoch(),
+                claim.membershipVersion(),
                 claim.fencingToken(),
                 queue.lifecycleState(),
                 queue.metadataVersion()

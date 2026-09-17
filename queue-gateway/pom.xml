@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.github.indreshgahoi</groupId>
         <artifactId>distributed-queue-parent</artifactId>
-        <version>0.28.0-SNAPSHOT</version>
+        <version>0.29.0-SNAPSHOT</version>
     </parent>
     <artifactId>queue-gateway</artifactId>
     <name>Distributed Queue Gateway</name>

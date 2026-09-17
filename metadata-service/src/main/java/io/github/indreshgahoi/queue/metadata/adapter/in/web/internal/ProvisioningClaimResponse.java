@@ -13,7 +13,7 @@ public record ProvisioningClaimResponse(
         int partitionId,
         String workerId,
         long registrationEpoch,
-        long placementEpoch,
+        long membershipVersion,
         long fencingToken,
         Instant leaseExpiresAt
 ) {
@@ -28,7 +28,7 @@ public record ProvisioningClaimResponse(
                 claim.identity().partitionId(),
                 claim.identity().workerId(),
                 claim.identity().registrationEpoch(),
-                claim.identity().placementEpoch(),
+                claim.identity().membershipVersion(),
                 claim.identity().fencingToken(),
                 claim.leaseExpiresAt()
         );

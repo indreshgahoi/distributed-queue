@@ -92,7 +92,8 @@ class QueueMetadataController {
                 new CreateQueueCommand(
                         tenantId,
                         request.queueName(),
-                        idempotencyKey
+                        idempotencyKey,
+                        request.effectiveReplicationFactor()
                 )
         );
         URI location = ServletUriComponentsBuilder

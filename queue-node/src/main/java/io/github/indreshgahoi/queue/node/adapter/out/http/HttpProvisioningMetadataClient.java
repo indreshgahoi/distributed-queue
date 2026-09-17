@@ -73,7 +73,7 @@ final class HttpProvisioningMetadataClient
                                 assignment.partitionId(),
                                 assignment.workerId(),
                                 assignment.registrationEpoch(),
-                                assignment.placementEpoch(),
+                                assignment.membershipVersion(),
                                 assignment.fencingToken()
                         )
                 )
@@ -93,7 +93,7 @@ final class HttpProvisioningMetadataClient
             int partitionId,
             String workerId,
             long registrationEpoch,
-            long placementEpoch,
+            long membershipVersion,
             long fencingToken
     ) {
     }
@@ -106,7 +106,7 @@ final class HttpProvisioningMetadataClient
             int partitionId,
             String workerId,
             long registrationEpoch,
-            long placementEpoch,
+            long membershipVersion,
             long fencingToken,
             Instant leaseExpiresAt
     ) {
@@ -119,7 +119,7 @@ final class HttpProvisioningMetadataClient
                     partitionId,
                     workerId,
                     registrationEpoch,
-                    placementEpoch,
+                    membershipVersion,
                     fencingToken,
                     leaseExpiresAt
             );

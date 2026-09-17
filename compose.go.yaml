@@ -1,0 +1,92 @@
+name: distributed-queue-go
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    environment:
+      POSTGRES_DB: distributed_queue
+      POSTGRES_USER: queue
+      POSTGRES_PASSWORD: queue
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queue -d distributed_queue"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./deploy/postgres/001_control_plane.sql:/docker-entrypoint-initdb.d/001_control_plane.sql:ro
+      - go-control-postgres:/var/lib/postgresql/data
+
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.6.14
+    command:
+      - /usr/local/bin/etcd
+      - --name=control-plane
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=control-plane=http://etcd:2380
+      - --initial-cluster-state=new
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "endpoint", "health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "52379:2379"
+    volumes:
+      - go-control-etcd:/etcd-data
+
+  metadata-api:
+    build:
+      context: .
+      dockerfile: deploy/go/Dockerfile
+      args:
+        TARGET: metadata-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DQ_DATABASE_URL: postgres://queue:queue@postgres:5432/distributed_queue?sslmode=disable
+      DQ_METADATA_LISTEN_ADDRESS: :8080
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "18080:8080"
+    restart: unless-stopped
+
+  coordination-projector:
+    build:
+      context: .
+      dockerfile: deploy/go/Dockerfile
+      args:
+        TARGET: coordination-projector
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    environment:
+      DQ_DATABASE_URL: postgres://queue:queue@postgres:5432/distributed_queue?sslmode=disable
+      DQ_ETCD_ENDPOINTS: http://etcd:2379
+      DQ_CDC_SLOT: dq_coordination_projector
+      DQ_CDC_PUBLICATION: dq_outbox_publication
+    restart: unless-stopped
+
+volumes:
+  go-control-postgres:
+  go-control-etcd:

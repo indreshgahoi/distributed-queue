@@ -8,6 +8,7 @@ final class OpenApiExamples {
               "queueId": "f8a82bd2-f94d-4de5-8df7-66161975f35b",
               "generationId": "653af9a3-36ba-47f5-bd65-209d6b6c78c2",
               "partitionCount": 1,
+              "replicationFactor": 3,
               "lifecycleState": "PROVISIONING",
               "metadataVersion": 0,
               "createdAt": "2026-09-01T12:00:00Z",

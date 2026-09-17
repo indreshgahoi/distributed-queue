@@ -8,8 +8,10 @@ import io.github.indreshgahoi.queue.metadata.domain.model.PartitionPlacement;
 import io.github.indreshgahoi.queue.metadata.domain.model.PartitionRuntimeIdentity;
 import io.github.indreshgahoi.queue.metadata.domain.model.PartitionRuntimeState;
 import io.github.indreshgahoi.queue.metadata.domain.model.PartitionRuntimeStatus;
+import io.github.indreshgahoi.queue.metadata.domain.model.PartitionReplicaGroup;
 import io.github.indreshgahoi.queue.metadata.domain.model.RegisterNodeCommand;
 import io.github.indreshgahoi.queue.metadata.domain.model.QueueRoute;
+import io.github.indreshgahoi.queue.metadata.domain.model.ReplicaAssignment;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -57,6 +59,18 @@ final class NodeTopologyService implements NodeTopologyUseCase {
     @Override
     public List<PartitionPlacement> placements() {
         return repository.placements();
+    }
+
+    @Override
+    public List<PartitionReplicaGroup> replicaGroups() {
+        return repository.replicaGroups();
+    }
+
+    @Override
+    public List<ReplicaAssignment> replicaAssignments(
+            NodeLeaseIdentity identity
+    ) {
+        return repository.replicaAssignments(identity);
     }
 
     @Override

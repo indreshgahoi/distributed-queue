@@ -2,9 +2,11 @@
 
 ## Status
 
-**Target logical schema.** Existing tables remain authoritative for current
-single-placement behavior. Names below guide future migrations; they are not yet
-implemented.
+**Current plus target logical schema.** v0.29 implements queue replication
+factor, replica groups, replica members, per-member readiness, and per-member
+provisioning claims. The richer consensus observations described below remain
+the target for later milestones. The old single placement is retained only as
+a bootstrap-leader compatibility projection for the current data plane.
 
 ## Ownership boundary
 

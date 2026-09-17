@@ -73,6 +73,28 @@ class NodeTopologyController {
                 .toList();
     }
 
+    @GetMapping("/replica-groups")
+    @Operation(summary = "List desired partition replica groups")
+    List<ReplicaGroupResponse> replicaGroups() {
+        return topology.replicaGroups().stream()
+                .map(ReplicaGroupResponse::from)
+                .toList();
+    }
+
+    @GetMapping("/nodes/{nodeId}/replica-assignments")
+    @Operation(summary = "List desired replicas for a live node incarnation")
+    List<ReplicaAssignmentResponse> replicaAssignments(
+            @PathVariable String nodeId,
+            @org.springframework.web.bind.annotation.RequestParam
+            long registrationEpoch
+    ) {
+        return topology.replicaAssignments(
+                        new NodeLeaseIdentity(nodeId, registrationEpoch)
+                ).stream()
+                .map(ReplicaAssignmentResponse::from)
+                .toList();
+    }
+
     @GetMapping("/nodes/{nodeId}/runtime-placements")
     @Operation(summary = "List ACTIVE placements for a live node incarnation")
     List<PartitionPlacementResponse> activePlacements(

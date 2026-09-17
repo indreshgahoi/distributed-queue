@@ -1727,3 +1727,56 @@ Required behavior:
     preserve the prior authority when failure occurs before promotion
     treat post-promotion directory-force failure as indeterminate
     require reload before further authority-changing operations
+
+## F109 — Insufficient Live Nodes for Initial Replica Factor
+
+Queue creation requests more replicas than the current live node registry can
+provide.
+
+Required behavior:
+
+    keep the replica group in PENDING_CAPACITY
+    create no partial member set and no bootstrap leader
+    retry placement when a live node later asks for work
+
+## F110 — Two Planners Select Initial Membership Concurrently
+
+Two metadata-service transactions attempt to place pending groups at the same
+time.
+
+Required behavior:
+
+    lock one group with FOR UPDATE SKIP LOCKED
+    never publish two configurations for the same group
+    permit bounded load imbalance across different concurrent groups
+
+## F111 — Replica Provisioning Claim Becomes Stale
+
+A claim expires, the node re-registers, its fencing token is superseded, or the
+membership version changes before completion.
+
+Required behavior:
+
+    reject the completion
+    do not mark that member READY
+    do not activate the group or queue from stale evidence
+
+## F112 — Only Some Initial Replicas Are Ready
+
+One or more members materialize local storage while another member has not yet
+completed provisioning.
+
+Required behavior:
+
+    retain accepted per-member readiness
+    keep group and queue in PROVISIONING
+    activate only when every current member is READY under a live incarnation
+
+## F113 — Stale Node Requests Replica Assignments
+
+An expired or replaced node process requests its desired replica list.
+
+Required behavior:
+
+    fail closed with lost-node-authority semantics
+    disclose no assignments as authority for that stale process

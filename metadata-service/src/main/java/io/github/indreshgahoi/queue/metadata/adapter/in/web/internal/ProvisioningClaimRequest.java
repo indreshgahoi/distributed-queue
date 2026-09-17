@@ -12,7 +12,7 @@ public record ProvisioningClaimRequest(
         @Min(0) int partitionId,
         @NotBlank @Size(max = 255) String workerId,
         @Min(1) long registrationEpoch,
-        @Min(1) long placementEpoch,
+        @Min(1) long membershipVersion,
         @Min(1) long fencingToken
 ) {
 }

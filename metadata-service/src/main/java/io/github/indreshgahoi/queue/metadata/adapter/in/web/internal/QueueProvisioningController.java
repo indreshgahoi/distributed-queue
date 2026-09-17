@@ -83,7 +83,7 @@ class QueueProvisioningController {
                 request.partitionId(),
                 request.workerId(),
                 request.registrationEpoch(),
-                request.placementEpoch(),
+                request.membershipVersion(),
                 request.fencingToken()
         );
     }

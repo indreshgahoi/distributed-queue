@@ -12,11 +12,37 @@ public record QueueDescriptor(
         UUID queueId,
         UUID generationId,
         int partitionCount,
+        int replicationFactor,
         QueueLifecycleState lifecycleState,
         long metadataVersion,
         Instant createdAt,
         Instant updatedAt
 ) {
+    public QueueDescriptor(
+            String tenantId,
+            String queueName,
+            UUID queueId,
+            UUID generationId,
+            int partitionCount,
+            QueueLifecycleState lifecycleState,
+            long metadataVersion,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
+        this(
+                tenantId,
+                queueName,
+                queueId,
+                generationId,
+                partitionCount,
+                CreateQueueCommand.DEFAULT_REPLICATION_FACTOR,
+                lifecycleState,
+                metadataVersion,
+                createdAt,
+                updatedAt
+        );
+    }
+
     public QueueDescriptor {
         requireText(tenantId, "tenantId");
         requireText(queueName, "queueName");
@@ -29,6 +55,13 @@ public record QueueDescriptor(
         if (partitionCount != 1) {
             throw new IllegalArgumentException(
                     "v0.18 supports exactly one partition"
+            );
+        }
+        if (replicationFactor < 1
+                || replicationFactor
+                > CreateQueueCommand.MAX_REPLICATION_FACTOR) {
+            throw new IllegalArgumentException(
+                    "Invalid replicationFactor"
             );
         }
         if (metadataVersion < 0) {

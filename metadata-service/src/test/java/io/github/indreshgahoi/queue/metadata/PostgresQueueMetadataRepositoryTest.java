@@ -9,6 +9,7 @@ import io.github.indreshgahoi.queue.metadata.domain.exception.NodeLeaseLostExcep
 import io.github.indreshgahoi.queue.metadata.domain.exception.PartitionRuntimeAuthorityLostException;
 import io.github.indreshgahoi.queue.metadata.domain.model.ClaimProvisioningCommand;
 import io.github.indreshgahoi.queue.metadata.domain.model.ProvisioningClaim;
+import io.github.indreshgahoi.queue.metadata.domain.model.ProvisioningClaimIdentity;
 import io.github.indreshgahoi.queue.metadata.domain.exception.IdempotencyConflictException;
 import io.github.indreshgahoi.queue.metadata.domain.exception.QueueAlreadyExistsException;
 import io.github.indreshgahoi.queue.metadata.domain.exception.QueueNotFoundException;
@@ -23,6 +24,8 @@ import io.github.indreshgahoi.queue.metadata.domain.model.NodeLeaseIdentity;
 import io.github.indreshgahoi.queue.metadata.domain.model.RegisterNodeCommand;
 import io.github.indreshgahoi.queue.metadata.domain.model.PartitionRuntimeIdentity;
 import io.github.indreshgahoi.queue.metadata.domain.model.PartitionRuntimeState;
+import io.github.indreshgahoi.queue.metadata.domain.model.PartitionReplicaGroup;
+import io.github.indreshgahoi.queue.metadata.domain.model.ReplicaGroupState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -206,14 +209,17 @@ class PostgresQueueMetadataRepositoryTest {
         QueueDescriptor provisioning = catalog.createQueue(
                 command("tenant-a", "orders", "request-1")
         );
-        QueueDescriptor active =
-                lifecycle.completeProvisioning(provisioning);
+        provisionSingleReplica(provisioning);
+        QueueDescriptor deleting = catalog.beginDeleteQueue(
+                "tenant-a",
+                "orders"
+        );
+        QueueDescriptor deleted = lifecycle.completeDeletion(deleting);
 
-        assertEquals(QueueLifecycleState.ACTIVE, active.lifecycleState());
-        assertEquals(1, active.metadataVersion());
+        assertEquals(QueueLifecycleState.DELETED, deleted.lifecycleState());
         assertThrows(
                 StaleQueueMetadataException.class,
-                () -> lifecycle.completeProvisioning(provisioning)
+                () -> lifecycle.completeDeletion(deleting)
         );
     }
 
@@ -222,12 +228,7 @@ class PostgresQueueMetadataRepositoryTest {
         QueueDescriptor provisioning = catalog.createQueue(
                 command("tenant-a", "orders", "request-1")
         );
-        QueueDescriptor provisioningFailed =
-                lifecycle.failProvisioning(provisioning);
-        QueueDescriptor retryingProvisioning =
-                lifecycle.retryProvisioning(provisioningFailed);
-        QueueDescriptor active =
-                lifecycle.completeProvisioning(retryingProvisioning);
+        QueueDescriptor active = provisionSingleReplica(provisioning);
         QueueDescriptor deleting =
                 catalog.beginDeleteQueue("tenant-a", "orders");
         QueueDescriptor deleteFailed =
@@ -250,8 +251,7 @@ class PostgresQueueMetadataRepositoryTest {
         QueueDescriptor provisioning = catalog.createQueue(
                 command("tenant-a", "orders", "request-1")
         );
-        QueueDescriptor active =
-                lifecycle.completeProvisioning(provisioning);
+        QueueDescriptor active = provisionSingleReplica(provisioning);
         QueueDescriptor deleting =
                 catalog.beginDeleteQueue("tenant-a", "orders");
         QueueDescriptor deleted =
@@ -444,14 +444,129 @@ class PostgresQueueMetadataRepositoryTest {
         ).orElseThrow();
 
         assertEquals(first.nodeId(), claim.identity().workerId());
-        assertEquals(1, claim.identity().placementEpoch());
+        assertEquals(1, claim.identity().membershipVersion());
         assertEquals(queue.queueId(), topology.placements().getFirst().queueId());
         assertEquals(first.nodeId(), topology.placements().getFirst().nodeId());
     }
 
     @Test
-    void changedPlacementEpochFencesExistingClaim()
-            throws SQLException {
+    void replicaGroupActivatesOnlyAfterEveryMemberIsReady() {
+        NodeRegistration first = register("node-a");
+        NodeRegistration second = register("node-b");
+        NodeRegistration third = register("node-c");
+        QueueDescriptor queue = catalog.createQueue(new CreateQueueCommand(
+                "tenant-a",
+                "orders",
+                "request-1",
+                3
+        ));
+
+        ProvisioningClaim firstClaim = claim(first);
+        PartitionReplicaGroup group = topology.replicaGroups().getFirst();
+
+        assertEquals(3, group.members().size());
+        assertEquals("node-a", group.bootstrapLeaderNodeId().orElseThrow());
+        assertEquals(1, topology.replicaAssignments(
+                leaseIdentity(second)
+        ).size());
+        assertEquals(
+                QueueLifecycleState.PROVISIONING,
+                provisioning.complete(firstClaim.identity()).lifecycleState()
+        );
+        assertEquals(
+                QueueLifecycleState.PROVISIONING,
+                provisioning.complete(claim(second).identity()).lifecycleState()
+        );
+        assertEquals(
+                QueueLifecycleState.ACTIVE,
+                provisioning.complete(claim(third).identity()).lifecycleState()
+        );
+        assertEquals(queue.queueId(), topology.replicaGroups()
+                .getFirst().queueId());
+        assertEquals(
+                ReplicaGroupState.ACTIVE,
+                topology.replicaGroups().getFirst().state()
+        );
+    }
+
+    @Test
+    void insufficientCapacityLeavesGroupPendingWithoutPartialMembers() {
+        NodeRegistration first = register("node-a");
+        register("node-b");
+        catalog.createQueue(new CreateQueueCommand(
+                "tenant-a",
+                "orders",
+                "request-1",
+                3
+        ));
+
+        assertTrue(provisioning.claim(new ClaimProvisioningCommand(
+                first.nodeId(),
+                first.registrationEpoch(),
+                Duration.ofSeconds(30)
+        )).isEmpty());
+
+        PartitionReplicaGroup group = topology.replicaGroups().getFirst();
+        assertEquals(
+                ReplicaGroupState.PENDING_CAPACITY,
+                group.state()
+        );
+        assertTrue(group.members().isEmpty());
+        assertTrue(group.bootstrapLeaderNodeId().isEmpty());
+    }
+
+    @Test
+    void staleNodeRegistrationCannotReadReplicaAssignments() {
+        NodeRegistration stale = register("node-a");
+        register("node-b");
+        register("node-c");
+        catalog.createQueue(new CreateQueueCommand(
+                "tenant-a",
+                "orders",
+                "request-1",
+                3
+        ));
+        claim(stale);
+        register("node-a");
+
+        assertThrows(
+                NodeLeaseLostException.class,
+                () -> topology.replicaAssignments(leaseIdentity(stale))
+        );
+    }
+
+    @Test
+    void newNodeIncarnationReprovisionsPreviouslyReadyReplica() {
+        NodeRegistration stale = register("node-a");
+        NodeRegistration second = register("node-b");
+        NodeRegistration third = register("node-c");
+        catalog.createQueue(new CreateQueueCommand(
+                "tenant-a",
+                "orders",
+                "request-1",
+                3
+        ));
+        provisioning.complete(claim(stale).identity());
+
+        NodeRegistration replacement = register("node-a");
+        ProvisioningClaim replacementClaim = claim(replacement);
+
+        assertEquals(2, replacementClaim.identity().fencingToken());
+        assertEquals(
+                QueueLifecycleState.PROVISIONING,
+                provisioning.complete(
+                        replacementClaim.identity()
+                ).lifecycleState()
+        );
+        provisioning.complete(claim(second).identity());
+        assertEquals(
+                QueueLifecycleState.ACTIVE,
+                provisioning.complete(claim(third).identity()).lifecycleState()
+        );
+    }
+
+    @Test
+    void wrongMembershipVersionCannotCompleteExistingClaim() {
         NodeRegistration node = register("node-a");
         catalog.createQueue(
                 command("tenant-a", "orders", "request-1")
@@ -464,18 +579,19 @@ class PostgresQueueMetadataRepositoryTest {
                 )
         ).orElseThrow();
 
-        try (Connection connection = dataSource.getConnection();
-             Statement statement = connection.createStatement()) {
-            statement.executeUpdate(
-                    "UPDATE queue_partition_placements "
-                            + "SET placement_epoch = placement_epoch + 1, "
-                            + "metadata_version = metadata_version + 1"
-            );
-        }
+        var wrongMembership = new ProvisioningClaimIdentity(
+                claim.identity().queueId(),
+                claim.identity().generationId(),
+                claim.identity().partitionId(),
+                claim.identity().workerId(),
+                claim.identity().registrationEpoch(),
+                claim.identity().membershipVersion() + 1,
+                claim.identity().fencingToken()
+        );
 
         assertThrows(
                 ProvisioningClaimLostException.class,
-                () -> provisioning.complete(claim.identity())
+                () -> provisioning.complete(wrongMembership)
         );
     }
 
@@ -766,7 +882,7 @@ class PostgresQueueMetadataRepositoryTest {
                 0,
                 node.nodeId(),
                 node.registrationEpoch(),
-                claim.identity().placementEpoch()
+                claim.identity().membershipVersion()
         );
     }
 
@@ -776,6 +892,28 @@ class PostgresQueueMetadataRepositoryTest {
                 URI.create("http://" + nodeId + ":8081"),
                 Duration.ofMinutes(5)
         ));
+    }
+
+    private ProvisioningClaim claim(NodeRegistration node) {
+        return provisioning.claim(new ClaimProvisioningCommand(
+                node.nodeId(),
+                node.registrationEpoch(),
+                Duration.ofSeconds(30)
+        )).orElseThrow();
+    }
+
+    private QueueDescriptor provisionSingleReplica(QueueDescriptor queue) {
+        NodeRegistration node = register("node-a");
+        QueueDescriptor active = provisioning.complete(claim(node).identity());
+        assertEquals(queue.queueId(), active.queueId());
+        return active;
+    }
+
+    private NodeLeaseIdentity leaseIdentity(NodeRegistration node) {
+        return new NodeLeaseIdentity(
+                node.nodeId(),
+                node.registrationEpoch()
+        );
     }
 
     @Test
@@ -811,6 +949,7 @@ class PostgresQueueMetadataRepositoryTest {
         assertEquals(201, created.statusCode());
         assertEquals(200, found.statusCode());
         assertTrue(found.body().contains("\"queueName\":\"orders\""));
+        assertTrue(found.body().contains("\"replicationFactor\":3"));
         assertTrue(found.body().contains("\"lifecycleState\":\"PROVISIONING\""));
     }
 
@@ -914,7 +1053,8 @@ class PostgresQueueMetadataRepositoryTest {
         return new CreateQueueCommand(
                 tenantId,
                 queueName,
-                idempotencyKey
+                idempotencyKey,
+                1
         );
     }
 

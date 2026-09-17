@@ -12,7 +12,7 @@ production deployment.
 - Maven 3;
 - Docker Engine or Docker Desktop;
 - Docker Compose v2 (`docker compose version`);
-- local ports `5432`, `8080`, `8081`, and `8082` available.
+- local ports `5432`, `8080`, `8081`, `8082`, `8083`, and `8084` available.
 
 Run commands from the repository root.
 
@@ -22,8 +22,10 @@ Run commands from the repository root.
 |---|---:|---|
 | PostgreSQL | 5432 | Metadata persistence |
 | Metadata service | 8080 | Queue lifecycle and placement control plane |
-| Queue node | 8081 | Local partition runtime and trusted internal APIs |
+| Queue node 1 | 8081 | Bootstrap data plane and replica storage |
 | Queue gateway | 8082 | Stable customer message API |
+| Queue node 2 | 8083 | Replica storage and trusted internal APIs |
+| Queue node 3 | 8084 | Replica storage and trusted internal APIs |
 
 ## Start the complete environment
 
@@ -38,13 +40,14 @@ applies metadata schema migrations during metadata-service startup.
 Expected state:
 
 - `postgres` is `healthy`;
-- `metadata-service`, `queue-node`, and `queue-gateway` are `Up`.
+- `metadata-service`, all three queue nodes, and `queue-gateway` are `Up`.
 
 Follow logs:
 
 ```bash
 docker compose logs --follow metadata-service
 docker compose logs --follow queue-node
+docker compose logs --follow queue-node-2 queue-node-3
 docker compose logs --follow queue-gateway
 ```
 
@@ -62,6 +65,8 @@ The response should contain `"status":"UP"`.
 |---|---|
 | Metadata | [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html) |
 | Queue node | [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html) |
+| Queue node 2 | [http://localhost:8083/swagger-ui.html](http://localhost:8083/swagger-ui.html) |
+| Queue node 3 | [http://localhost:8084/swagger-ui.html](http://localhost:8084/swagger-ui.html) |
 | Queue gateway | [http://localhost:8082/swagger-ui.html](http://localhost:8082/swagger-ui.html) |
 
 OpenAPI documents are exposed at `/v3/api-docs` on each service.
@@ -73,12 +78,13 @@ curl --request POST \
   http://localhost:8080/api/v1/tenants/acme/queues \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: create-orders-001' \
-  --data '{"queueName":"orders"}'
+  --data '{"queueName":"orders","replicationFactor":3}'
 ```
 
-The response normally starts in `PROVISIONING`. Queue-node reconciliation
-materializes lineage-bound storage and later publishes `ACTIVE`. Queue creation
-success does not mean storage is immediately ready.
+The response normally starts in `PROVISIONING`. The three queue nodes
+independently materialize their assigned lineage-bound storage. Metadata marks
+the queue `ACTIVE` only after all three complete fenced provisioning. Queue
+creation success does not mean storage is immediately ready.
 
 Read or list queue descriptors:
 
@@ -148,6 +154,58 @@ mvn clean package -DskipTests
 
 PostgreSQL integration tests use Testcontainers and are skipped when Docker is
 unavailable.
+
+## Run the Go control-plane foundation
+
+This stack is separate from the Java baseline. It starts PostgreSQL with logical
+WAL, etcd, the Go metadata API, and the non-polling CDC projector:
+
+```bash
+docker compose -f compose.go.yaml up --detach --build
+docker compose -f compose.go.yaml ps
+```
+
+Create a queue through the Go metadata API on port `18080`:
+
+```bash
+curl --fail http://localhost:18080/health/ready
+
+curl --request POST \
+  http://localhost:18080/v1/tenants/acme/queues \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: create-orders-001' \
+  --data '{"name":"orders","partitionCount":4}'
+```
+
+Queue creation commits the queue row, idempotency record, and outbox event in
+one PostgreSQL transaction. The projector consumes `pgoutput` from a durable
+replication slot and updates etcd. It does not poll metadata tables.
+
+Inspect projected queue state:
+
+```bash
+docker compose -f compose.go.yaml exec etcd \
+  /usr/local/bin/etcdctl get /dq/v1/projections/current/queues/ --prefix
+```
+
+Run Go checks with Go 1.25:
+
+```bash
+go test ./...
+go vet ./...
+```
+
+The adapter integration tests are enabled with `DQ_TEST_POSTGRES_URL`,
+`DQ_TEST_CDC_POSTGRES_URL`, and `DQ_TEST_ETCD_ENDPOINT`.
+
+Stop the Go stack while preserving its volumes:
+
+```bash
+docker compose -f compose.go.yaml down
+```
+
+Add `--volumes` only when you deliberately want to delete its local PostgreSQL
+and etcd state.
 
 ## Run Java on the host
 

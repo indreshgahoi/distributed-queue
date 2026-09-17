@@ -102,7 +102,7 @@ class PostgresQueueMetadataRepository
                     command,
                     claimedAt
             );
-            assignNextUnplacedPartition(connection, claimedAt);
+            placeNextPendingReplicaGroup(connection, claimedAt);
             Optional<ProvisioningCandidate> candidate =
                     lockProvisioningCandidate(
                             connection,
@@ -123,7 +123,7 @@ class PostgresQueueMetadataRepository
                     queue,
                     command.workerId(),
                     command.registrationEpoch(),
-                    selected.placementEpoch(),
+                    selected.membershipVersion(),
                     leaseExpiresAt,
                     claimedAt
             );
@@ -136,7 +136,7 @@ class PostgresQueueMetadataRepository
                                     0,
                                     command.workerId(),
                                     command.registrationEpoch(),
-                                    selected.placementEpoch(),
+                                    selected.membershipVersion(),
                                     token
                             ),
                             leaseExpiresAt
@@ -368,56 +368,191 @@ class PostgresQueueMetadataRepository
         }
     }
 
-    private void assignNextUnplacedPartition(
+    private void placeNextPendingReplicaGroup(
             Connection connection,
             Instant assignedAt
     ) throws SQLException {
+        Optional<PendingReplicaGroup> pending = lockPendingReplicaGroup(
+                connection
+        );
+        if (pending.isEmpty()) {
+            return;
+        }
+        PendingReplicaGroup group = pending.orElseThrow();
+        List<String> nodes = selectReplicaNodes(
+                connection,
+                assignedAt,
+                group.replicationFactor()
+        );
+        if (nodes.size() != group.replicationFactor()) {
+            // Membership is durable authority. Publishing a partial group
+            // would make later quorum size and recovery decisions ambiguous.
+            return;
+        }
+
+        insertReplicaMembers(connection, group, nodes, assignedAt);
+        activateReplicaGroupPlacement(
+                connection,
+                group,
+                nodes.getFirst(),
+                assignedAt
+        );
+        insertBootstrapPlacement(
+                connection,
+                group,
+                nodes.getFirst(),
+                assignedAt
+        );
+    }
+
+    private Optional<PendingReplicaGroup> lockPendingReplicaGroup(
+            Connection connection
+    ) throws SQLException {
         String sql = """
-                WITH candidate AS (
-                    SELECT q.queue_id, q.generation_id
-                    FROM queues q
-                    WHERE q.lifecycle_state = 'PROVISIONING'
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM queue_partition_placements p
-                          WHERE p.queue_id = q.queue_id
-                            AND p.generation_id = q.generation_id
-                            AND p.partition_id = 0
-                      )
-                    ORDER BY q.created_at, q.queue_id
-                    FOR UPDATE OF q SKIP LOCKED
-                    LIMIT 1
-                ), selected_node AS (
-                    SELECT n.node_id
-                    FROM queue_nodes n
-                    LEFT JOIN queue_partition_placements p
-                      ON p.node_id = n.node_id
-                    WHERE n.lease_expires_at > ?
-                    GROUP BY n.node_id
-                    ORDER BY COUNT(p.queue_id), n.node_id
-                    LIMIT 1
-                )
-                INSERT INTO queue_partition_placements (
-                    queue_id,
-                    generation_id,
-                    partition_id,
-                    node_id,
-                    placement_epoch,
-                    metadata_version,
-                    created_at,
-                    updated_at
-                )
-                SELECT c.queue_id, c.generation_id, 0, n.node_id,
-                       1, 0, ?, ?
-                FROM candidate c
-                CROSS JOIN selected_node n
-                ON CONFLICT DO NOTHING
+                SELECT g.queue_id, g.generation_id, g.partition_id,
+                       g.replication_factor, g.membership_version
+                FROM queue_partition_replica_groups g
+                JOIN queues q
+                  ON q.queue_id = g.queue_id
+                 AND q.generation_id = g.generation_id
+                WHERE q.lifecycle_state = 'PROVISIONING'
+                  AND g.group_state = 'PENDING_CAPACITY'
+                ORDER BY g.created_at, g.queue_id
+                FOR UPDATE OF g SKIP LOCKED
+                LIMIT 1
+                """;
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql);
+             ResultSet resultSet = statement.executeQuery()) {
+            if (!resultSet.next()) {
+                return Optional.empty();
+            }
+            return Optional.of(new PendingReplicaGroup(
+                    resultSet.getObject("queue_id", UUID.class),
+                    resultSet.getObject("generation_id", UUID.class),
+                    resultSet.getInt("partition_id"),
+                    resultSet.getInt("replication_factor"),
+                    resultSet.getLong("membership_version")
+            ));
+        }
+    }
+
+    private List<String> selectReplicaNodes(
+            Connection connection,
+            Instant assignedAt,
+            int replicationFactor
+    ) throws SQLException {
+        String sql = """
+                SELECT n.node_id
+                FROM queue_nodes n
+                LEFT JOIN queue_partition_replicas r
+                  ON r.node_id = n.node_id
+                LEFT JOIN queues q
+                  ON q.queue_id = r.queue_id
+                 AND q.generation_id = r.generation_id
+                 AND q.lifecycle_state <> 'DELETED'
+                WHERE n.lease_expires_at > ?
+                GROUP BY n.node_id
+                ORDER BY COUNT(q.queue_id), n.node_id
+                LIMIT ?
                 """;
         try (PreparedStatement statement =
                      connection.prepareStatement(sql)) {
             statement.setTimestamp(1, Timestamp.from(assignedAt));
+            statement.setInt(2, replicationFactor);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<String> nodes = new ArrayList<>();
+                while (resultSet.next()) {
+                    nodes.add(resultSet.getString("node_id"));
+                }
+                return List.copyOf(nodes);
+            }
+        }
+    }
+
+    private void insertReplicaMembers(
+            Connection connection,
+            PendingReplicaGroup group,
+            List<String> nodes,
+            Instant assignedAt
+    ) throws SQLException {
+        String sql = """
+                INSERT INTO queue_partition_replicas (
+                    queue_id, generation_id, partition_id, node_id,
+                    membership_version, member_role, member_ordinal, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'VOTER', ?, ?)
+                """;
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql)) {
+            for (int ordinal = 0; ordinal < nodes.size(); ordinal++) {
+                statement.setObject(1, group.queueId());
+                statement.setObject(2, group.generationId());
+                statement.setInt(3, group.partitionId());
+                statement.setString(4, nodes.get(ordinal));
+                statement.setLong(5, group.membershipVersion());
+                statement.setInt(6, ordinal);
+                statement.setTimestamp(7, Timestamp.from(assignedAt));
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
+    private void activateReplicaGroupPlacement(
+            Connection connection,
+            PendingReplicaGroup group,
+            String bootstrapLeader,
+            Instant assignedAt
+    ) throws SQLException {
+        String sql = """
+                UPDATE queue_partition_replica_groups
+                SET group_state = 'PROVISIONING',
+                    bootstrap_leader_node_id = ?,
+                    updated_at = ?
+                WHERE queue_id = ?
+                  AND generation_id = ?
+                  AND partition_id = ?
+                  AND group_state = 'PENDING_CAPACITY'
+                """;
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql)) {
+            statement.setString(1, bootstrapLeader);
             statement.setTimestamp(2, Timestamp.from(assignedAt));
-            statement.setTimestamp(3, Timestamp.from(assignedAt));
+            statement.setObject(3, group.queueId());
+            statement.setObject(4, group.generationId());
+            statement.setInt(5, group.partitionId());
+            if (statement.executeUpdate() != 1) {
+                throw new QueueMetadataException(
+                        "Replica group placement authority was lost"
+                );
+            }
+        }
+    }
+
+    private void insertBootstrapPlacement(
+            Connection connection,
+            PendingReplicaGroup group,
+            String bootstrapLeader,
+            Instant assignedAt
+    ) throws SQLException {
+        // The existing data plane still consumes one placement. Until leader
+        // election replaces it, this row is a compatibility projection of the
+        // immutable group's bootstrap leader, not the replica membership.
+        String sql = """
+                INSERT INTO queue_partition_placements (
+                    queue_id, generation_id, partition_id, node_id,
+                    placement_epoch, metadata_version, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+                ON CONFLICT DO NOTHING
+                """;
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql)) {
+            statement.setObject(1, group.queueId());
+            statement.setObject(2, group.generationId());
+            statement.setInt(3, group.partitionId());
+            statement.setString(4, bootstrapLeader);
+            statement.setTimestamp(5, Timestamp.from(assignedAt));
+            statement.setTimestamp(6, Timestamp.from(assignedAt));
             statement.executeUpdate();
         }
     }
@@ -429,26 +564,48 @@ class PostgresQueueMetadataRepository
             Instant claimedAt
     ) throws SQLException {
         String sql = """
-                SELECT q.*, p.placement_epoch
+                SELECT q.*, r.membership_version
                 FROM queues q
-                JOIN queue_partition_placements p
-                  ON p.queue_id = q.queue_id
-                 AND p.generation_id = q.generation_id
-                 AND p.partition_id = 0
+                JOIN queue_partition_replica_groups g
+                  ON g.queue_id = q.queue_id
+                 AND g.generation_id = q.generation_id
+                 AND g.partition_id = 0
+                JOIN queue_partition_replicas r
+                  ON r.queue_id = g.queue_id
+                 AND r.generation_id = g.generation_id
+                 AND r.partition_id = g.partition_id
+                 AND r.membership_version = g.membership_version
                 JOIN queue_nodes n
-                  ON n.node_id = p.node_id
+                  ON n.node_id = r.node_id
                 WHERE q.lifecycle_state = 'PROVISIONING'
-                  AND p.node_id = ?
+                  AND g.group_state = 'PROVISIONING'
+                  AND r.node_id = ?
                   AND n.registration_epoch = ?
                   AND n.lease_expires_at > ?
                   AND NOT EXISTS (
                       SELECT 1
-                      FROM queue_provisioning_claims c
-                      WHERE c.queue_id = q.queue_id
+                      FROM queue_partition_replica_runtime_status s
+                      WHERE s.queue_id = r.queue_id
+                        AND s.generation_id = r.generation_id
+                        AND s.partition_id = r.partition_id
+                        AND s.node_id = r.node_id
+                        AND s.membership_version = r.membership_version
+                        AND s.registration_epoch = n.registration_epoch
+                        AND s.runtime_state = 'READY'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM queue_replica_provisioning_claims c
+                      WHERE c.queue_id = r.queue_id
+                        AND c.generation_id = r.generation_id
+                        AND c.partition_id = r.partition_id
+                        AND c.node_id = r.node_id
+                        AND c.membership_version = r.membership_version
+                        AND c.registration_epoch = n.registration_epoch
                         AND c.lease_expires_at > ?
                   )
                 ORDER BY q.created_at, q.queue_id
-                FOR UPDATE OF q SKIP LOCKED
+                FOR UPDATE OF r SKIP LOCKED
                 LIMIT 1
                 """;
         try (PreparedStatement statement =
@@ -461,7 +618,7 @@ class PostgresQueueMetadataRepository
                 return resultSet.next()
                         ? Optional.of(new ProvisioningCandidate(
                                 map(resultSet),
-                                resultSet.getLong("placement_epoch")
+                                resultSet.getLong("membership_version")
                         ))
                         : Optional.empty();
             }
@@ -473,30 +630,29 @@ class PostgresQueueMetadataRepository
             QueueDescriptor queue,
             String workerId,
             long registrationEpoch,
-            long placementEpoch,
+            long membershipVersion,
             Instant leaseExpiresAt,
             Instant claimedAt
     ) throws SQLException {
         String sql = """
-                INSERT INTO queue_provisioning_claims (
+                INSERT INTO queue_replica_provisioning_claims (
                     queue_id,
                     generation_id,
                     partition_id,
-                    worker_id,
+                    node_id,
+                    membership_version,
                     registration_epoch,
-                    placement_epoch,
                     fencing_token,
                     lease_expires_at,
                     updated_at
                 ) VALUES (?, ?, 0, ?, ?, ?, 1, ?, ?)
-                ON CONFLICT (queue_id) DO UPDATE
-                SET generation_id = EXCLUDED.generation_id,
-                    partition_id = EXCLUDED.partition_id,
-                    worker_id = EXCLUDED.worker_id,
+                ON CONFLICT (
+                    queue_id, generation_id, partition_id, node_id
+                ) DO UPDATE
+                SET membership_version = EXCLUDED.membership_version,
                     registration_epoch = EXCLUDED.registration_epoch,
-                    placement_epoch = EXCLUDED.placement_epoch,
                     fencing_token =
-                        queue_provisioning_claims.fencing_token + 1,
+                        queue_replica_provisioning_claims.fencing_token + 1,
                     lease_expires_at = EXCLUDED.lease_expires_at,
                     updated_at = EXCLUDED.updated_at
                 RETURNING fencing_token
@@ -506,8 +662,8 @@ class PostgresQueueMetadataRepository
             statement.setObject(1, queue.queueId());
             statement.setObject(2, queue.generationId());
             statement.setString(3, workerId);
-            statement.setLong(4, registrationEpoch);
-            statement.setLong(5, placementEpoch);
+            statement.setLong(4, membershipVersion);
+            statement.setLong(5, registrationEpoch);
             statement.setTimestamp(6, Timestamp.from(leaseExpiresAt));
             statement.setTimestamp(7, Timestamp.from(claimedAt));
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -527,9 +683,11 @@ class PostgresQueueMetadataRepository
     ) {
         Objects.requireNonNull(claim, "claim");
         return inTransaction(connection -> {
+            Instant completedAt = now();
             LockedProvisioningClaim current = lockClaim(
                     connection,
-                    claim.queueId()
+                    claim.queueId(),
+                    claim.workerId()
             ).orElseThrow(ProvisioningClaimLostException::new);
             if (!current.matches(claim)) {
                 throw new ProvisioningClaimLostException();
@@ -540,48 +698,81 @@ class PostgresQueueMetadataRepository
             }
             if (queue.lifecycleState()
                     != QueueLifecycleState.PROVISIONING
-                    || !current.authoritativeAt(now())) {
+                    || !current.authoritativeAt(completedAt)) {
                 throw new ProvisioningClaimLostException();
             }
-            return updateTransition(
+            updateReplicaRuntimeStatus(
                     connection,
-                    queue,
-                    completedState
+                    current,
+                    completedState == QueueLifecycleState.ACTIVE
+                            ? "READY"
+                            : "FAILED",
+                    completedAt
             );
+            if (completedState == QueueLifecycleState.PROVISIONING_FAILED) {
+                updateReplicaGroupState(
+                        connection,
+                        current,
+                        "PROVISIONING_FAILED",
+                        completedAt
+                );
+                return updateTransition(connection, queue, completedState);
+            }
+            if (!allReplicasReady(connection, current, completedAt)) {
+                // Per-member readiness is retained, but serving begins only
+                // after the complete configured replica set is materialized.
+                return queue;
+            }
+            updateReplicaGroupState(
+                    connection,
+                    current,
+                    "ACTIVE",
+                    completedAt
+            );
+            return updateTransition(connection, queue, completedState);
         });
     }
 
     private Optional<LockedProvisioningClaim> lockClaim(
             Connection connection,
-            UUID queueId
+            UUID queueId,
+            String workerId
     ) throws SQLException {
         String sql = """
                 SELECT q.*,
                        c.generation_id AS claim_generation_id,
                        c.partition_id AS claim_partition_id,
-                       c.worker_id AS claim_worker_id,
+                       c.node_id AS claim_worker_id,
                        c.registration_epoch AS claim_registration_epoch,
-                       c.placement_epoch AS claim_placement_epoch,
+                       c.membership_version AS claim_membership_version,
                        c.fencing_token AS claim_fencing_token,
                        c.lease_expires_at AS claim_lease_expires_at,
-                       p.placement_epoch AS current_placement_epoch,
+                       g.membership_version AS current_membership_version,
                        n.registration_epoch AS current_registration_epoch,
                        n.lease_expires_at AS node_lease_expires_at
                 FROM queues q
-                JOIN queue_provisioning_claims c
+                JOIN queue_replica_provisioning_claims c
                   ON c.queue_id = q.queue_id
-                JOIN queue_partition_placements p
-                  ON p.queue_id = q.queue_id
-                 AND p.generation_id = q.generation_id
-                 AND p.partition_id = c.partition_id
+                JOIN queue_partition_replicas r
+                  ON r.queue_id = c.queue_id
+                 AND r.generation_id = c.generation_id
+                 AND r.partition_id = c.partition_id
+                 AND r.node_id = c.node_id
+                JOIN queue_partition_replica_groups g
+                  ON g.queue_id = r.queue_id
+                 AND g.generation_id = r.generation_id
+                 AND g.partition_id = r.partition_id
+                 AND g.membership_version = r.membership_version
                 JOIN queue_nodes n
-                  ON n.node_id = p.node_id
+                  ON n.node_id = r.node_id
                 WHERE q.queue_id = ?
+                  AND c.node_id = ?
                 FOR UPDATE OF q, c
                 """;
         try (PreparedStatement statement =
                      connection.prepareStatement(sql)) {
             statement.setObject(1, queueId);
+            statement.setString(2, workerId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
                     return Optional.empty();
@@ -598,7 +789,7 @@ class PostgresQueueMetadataRepository
                                 resultSet.getLong(
                                         "claim_registration_epoch"
                                 ),
-                                resultSet.getLong("claim_placement_epoch"),
+                                resultSet.getLong("claim_membership_version"),
                                 resultSet.getLong("claim_fencing_token"),
                                 resultSet.getTimestamp(
                                         "claim_lease_expires_at"
@@ -607,13 +798,125 @@ class PostgresQueueMetadataRepository
                                         "current_registration_epoch"
                                 ),
                                 resultSet.getLong(
-                                        "current_placement_epoch"
+                                        "current_membership_version"
                                 ),
                                 resultSet.getTimestamp(
                                         "node_lease_expires_at"
                                 ).toInstant()
                         )
                 );
+            }
+        }
+    }
+
+    private void updateReplicaRuntimeStatus(
+            Connection connection,
+            LockedProvisioningClaim claim,
+            String state,
+            Instant updatedAt
+    ) throws SQLException {
+        String sql = """
+                INSERT INTO queue_partition_replica_runtime_status (
+                    queue_id, generation_id, partition_id, node_id,
+                    membership_version, registration_epoch,
+                    runtime_state, failure_reason, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (
+                    queue_id, generation_id, partition_id, node_id
+                ) DO UPDATE
+                SET membership_version = EXCLUDED.membership_version,
+                    registration_epoch = EXCLUDED.registration_epoch,
+                    runtime_state = EXCLUDED.runtime_state,
+                    failure_reason = EXCLUDED.failure_reason,
+                    updated_at = EXCLUDED.updated_at
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, claim.queue().queueId());
+            statement.setObject(2, claim.generationId());
+            statement.setInt(3, claim.partitionId());
+            statement.setString(4, claim.workerId());
+            statement.setLong(5, claim.membershipVersion());
+            statement.setLong(6, claim.registrationEpoch());
+            statement.setString(7, state);
+            statement.setString(
+                    8,
+                    "FAILED".equals(state)
+                            ? "Local replica provisioning failed"
+                            : null
+            );
+            statement.setTimestamp(9, Timestamp.from(updatedAt));
+            statement.executeUpdate();
+        }
+    }
+
+    private boolean allReplicasReady(
+            Connection connection,
+            LockedProvisioningClaim claim,
+            Instant checkedAt
+    ) throws SQLException {
+        String sql = """
+                SELECT g.replication_factor,
+                       COUNT(*) FILTER (
+                           WHERE s.runtime_state = 'READY'
+                             AND s.membership_version = g.membership_version
+                             AND s.registration_epoch = n.registration_epoch
+                             AND n.lease_expires_at > ?
+                       ) AS ready_count
+                FROM queue_partition_replica_groups g
+                JOIN queue_partition_replicas r
+                  ON r.queue_id = g.queue_id
+                 AND r.generation_id = g.generation_id
+                 AND r.partition_id = g.partition_id
+                 AND r.membership_version = g.membership_version
+                JOIN queue_nodes n ON n.node_id = r.node_id
+                LEFT JOIN queue_partition_replica_runtime_status s
+                  ON s.queue_id = r.queue_id
+                 AND s.generation_id = r.generation_id
+                 AND s.partition_id = r.partition_id
+                 AND s.node_id = r.node_id
+                WHERE g.queue_id = ?
+                  AND g.generation_id = ?
+                  AND g.partition_id = ?
+                  AND g.membership_version = ?
+                GROUP BY g.replication_factor
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setTimestamp(1, Timestamp.from(checkedAt));
+            statement.setObject(2, claim.queue().queueId());
+            statement.setObject(3, claim.generationId());
+            statement.setInt(4, claim.partitionId());
+            statement.setLong(5, claim.membershipVersion());
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next()
+                        && resultSet.getInt("ready_count")
+                        == resultSet.getInt("replication_factor");
+            }
+        }
+    }
+
+    private void updateReplicaGroupState(
+            Connection connection,
+            LockedProvisioningClaim claim,
+            String state,
+            Instant updatedAt
+    ) throws SQLException {
+        String sql = """
+                UPDATE queue_partition_replica_groups
+                SET group_state = ?, updated_at = ?
+                WHERE queue_id = ?
+                  AND generation_id = ?
+                  AND partition_id = ?
+                  AND membership_version = ?
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, state);
+            statement.setTimestamp(2, Timestamp.from(updatedAt));
+            statement.setObject(3, claim.queue().queueId());
+            statement.setObject(4, claim.generationId());
+            statement.setInt(5, claim.partitionId());
+            statement.setLong(6, claim.membershipVersion());
+            if (statement.executeUpdate() != 1) {
+                throw new ProvisioningClaimLostException();
             }
         }
     }
@@ -675,10 +978,11 @@ class PostgresQueueMetadataRepository
                     generation_id,
                     lifecycle_state,
                     partition_count,
+                    replication_factor,
                     metadata_version,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
 
         try (PreparedStatement statement =
@@ -692,16 +996,18 @@ class PostgresQueueMetadataRepository
                     descriptor.lifecycleState().name()
             );
             statement.setInt(6, descriptor.partitionCount());
-            statement.setLong(7, descriptor.metadataVersion());
+            statement.setInt(7, descriptor.replicationFactor());
+            statement.setLong(8, descriptor.metadataVersion());
             statement.setTimestamp(
-                    8,
+                    9,
                     Timestamp.from(descriptor.createdAt())
             );
             statement.setTimestamp(
-                    9,
+                    10,
                     Timestamp.from(descriptor.updatedAt())
             );
             statement.executeUpdate();
+            insertPendingReplicaGroup(connection, descriptor);
         } catch (SQLException e) {
             if ("23505".equals(e.getSQLState())) {
                 throw new QueueAlreadyExistsException(
@@ -735,6 +1041,33 @@ class PostgresQueueMetadataRepository
                         "Failed to complete idempotent request"
                 );
             }
+        }
+    }
+
+    private void insertPendingReplicaGroup(
+            Connection connection,
+            QueueDescriptor descriptor
+    ) throws SQLException {
+        String sql = """
+                INSERT INTO queue_partition_replica_groups (
+                    queue_id,
+                    generation_id,
+                    partition_id,
+                    replication_factor,
+                    membership_version,
+                    group_state,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, 0, ?, 1, 'PENDING_CAPACITY', ?, ?)
+                """;
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql)) {
+            statement.setObject(1, descriptor.queueId());
+            statement.setObject(2, descriptor.generationId());
+            statement.setInt(3, descriptor.replicationFactor());
+            statement.setTimestamp(4, Timestamp.from(descriptor.createdAt()));
+            statement.setTimestamp(5, Timestamp.from(descriptor.updatedAt()));
+            statement.executeUpdate();
         }
     }
 
@@ -824,6 +1157,7 @@ class PostgresQueueMetadataRepository
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 1,
+                command.replicationFactor(),
                 QueueLifecycleState.PROVISIONING,
                 0,
                 now,
@@ -876,6 +1210,7 @@ class PostgresQueueMetadataRepository
                 resultSet.getObject("queue_id", UUID.class),
                 resultSet.getObject("generation_id", UUID.class),
                 resultSet.getInt("partition_count"),
+                resultSet.getInt("replication_factor"),
                 QueueLifecycleState.valueOf(
                         resultSet.getString("lifecycle_state")
                 ),
@@ -894,7 +1229,9 @@ class PostgresQueueMetadataRepository
             byte[] hash = digest.digest(
                     (OPERATION_CREATE_QUEUE
                             + "\u0000"
-                            + command.queueName())
+                            + command.queueName()
+                            + "\u0000"
+                            + command.replicationFactor())
                             .getBytes(StandardCharsets.UTF_8)
             );
             return HexFormat.of().formatHex(hash);
@@ -964,11 +1301,11 @@ class PostgresQueueMetadataRepository
             int partitionId,
             String workerId,
             long registrationEpoch,
-            long placementEpoch,
+            long membershipVersion,
             long fencingToken,
             Instant leaseExpiresAt,
             long currentRegistrationEpoch,
-            long currentPlacementEpoch,
+            long currentMembershipVersion,
             Instant nodeLeaseExpiresAt
     ) {
         boolean matches(ProvisioningClaimIdentity identity) {
@@ -978,7 +1315,7 @@ class PostgresQueueMetadataRepository
                     && workerId.equals(identity.workerId())
                     && registrationEpoch
                     == identity.registrationEpoch()
-                    && placementEpoch == identity.placementEpoch()
+                    && membershipVersion == identity.membershipVersion()
                     && fencingToken == identity.fencingToken();
         }
 
@@ -986,13 +1323,22 @@ class PostgresQueueMetadataRepository
             return leaseExpiresAt.isAfter(instant)
                     && nodeLeaseExpiresAt.isAfter(instant)
                     && registrationEpoch == currentRegistrationEpoch
-                    && placementEpoch == currentPlacementEpoch;
+                    && membershipVersion == currentMembershipVersion;
         }
     }
 
     private record ProvisioningCandidate(
             QueueDescriptor queue,
-            long placementEpoch
+            long membershipVersion
+    ) {
+    }
+
+    private record PendingReplicaGroup(
+            UUID queueId,
+            UUID generationId,
+            int partitionId,
+            int replicationFactor,
+            long membershipVersion
     ) {
     }
 }
