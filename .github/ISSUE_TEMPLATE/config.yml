@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Architecture handbook
-    url: https://github.com/indreshgahoi/distributed-queue-java/blob/main/docs/architecture/README.md
+    url: https://github.com/indreshgahoi/distributed-queue/blob/main/docs/architecture/README.md
     about: Review the target architecture and guarantee boundaries before opening an issue.
   - name: Distributed queue delivery plan
-    url: https://github.com/indreshgahoi/distributed-queue-java/blob/main/docs/distributed-queue-delivery-plan.md
+    url: https://github.com/indreshgahoi/distributed-queue/blob/main/docs/distributed-queue-delivery-plan.md
     about: Review milestone order, dependencies, benchmark gates, and exit criteria.
