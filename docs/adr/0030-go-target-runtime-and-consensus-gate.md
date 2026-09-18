@@ -4,6 +4,11 @@
 
 Accepted for the target architecture.
 
+Amended by [ADR 0033](0033-accept-etcd-raft-core.md), which completes the gate
+by accepting `go.etcd.io/raft/v3 v3.7.0` and assigning the surrounding durable
+Multi-Raft host to this project. Candidate-specific Dragonboat statements below
+record the context at the time of this decision.
+
 This ADR supersedes ADR 0001's language choice and ADR 0029's Apache Ratis
 preference for new target-runtime work. Those ADRs remain historical records of
 the Java learning path; they are not instructions to delete the Java baseline.

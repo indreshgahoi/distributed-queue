@@ -11,8 +11,8 @@ claim is made by this RFC.
 
 **Implementation language:** Go.
 
-**Leading consensus candidate:** Dragonboat, subject to the approval gates in
-this document. Language selection does not automatically approve the library.
+**Accepted consensus core:** `go.etcd.io/raft/v3 v3.7.0`. ADR 0033 makes the
+durable Multi-Raft host an explicit project responsibility.
 
 **Related control-plane design:**
 [RFC-104](../architecture/Control_Plane_Architecture_RFC.md).
@@ -98,7 +98,7 @@ flowchart LR
     Routes[Local route cache]
 
     subgraph NodeA[Queue node A]
-        HostA[Dragonboat NodeHost]
+        HostA[Project Multi-Raft host]
         GroupA[Partition group leader]
         StoreA[Replica storage]
         StateA[Queue state machine]
@@ -137,8 +137,8 @@ tenantId
   queueId
     generationId
       partitionId
-        raftGroupId / Dragonboat ShardID
-          replicaId / Dragonboat ReplicaID
+        raftGroupId / RawNode group key
+          replicaId / Raft node ID
             nodeId
             volumeId
 ```
@@ -376,52 +376,46 @@ and is explicitly not atomic; it requires its own idempotent delivery design.
 
 ### 12.1 Mapping
 
-| Queue concept | Dragonboat concept |
+| Queue concept | etcd/raft host concept |
 |---|---|
-| Partition | Shard / Raft group |
-| `raftGroupId` | `ShardID` |
-| Replica identity | `ReplicaID` |
-| Queue-node process | `NodeHost` owner |
-| Queue state machine | Project-owned state-machine adapter |
-| Raft durable log | Dragonboat LogDB contract |
-| Portable queue snapshot | State-machine snapshot stream |
+| Partition | One `RawNode` / Raft group |
+| `raftGroupId` | Project-owned stable group key |
+| Replica identity | Raft node ID within the group |
+| Queue-node process | Project-owned Multi-Raft host |
+| Queue state machine | Project-owned committed-entry adapter |
+| Raft durable log | Project-owned per-volume storage implementing `Storage` |
+| Portable queue snapshot | Project-owned snapshot stream and transfer protocol |
 
-Dragonboat types stop at the adapter boundary. Domain commands and results do
-not expose Dragonboat APIs.
+etcd/raft types stop at the consensus adapter and host boundaries. Domain
+commands and results do not expose them.
 
-### 12.2 Why Dragonboat leads
+### 12.2 Why etcd/raft is accepted
 
-Dragonboat is designed to host many Raft groups and already supplies shared
-execution, transport, snapshots, membership operations, ReadIndex support, and
-custom LogDB and transport hooks. This is a better starting shape than wrapping
-one independently resourced Raft instance per partition.
+`etcd/raft v3.7.0` is a supported deterministic consensus core with broad
+production lineage. It exposes the protocol work as explicit `Ready` batches,
+which lets this project control per-volume durability, group commit, scheduling,
+transport batching, fault injection, and multi-tenant fairness.
 
-Approval still requires proof of:
+That control is also a cost. The project owns network transport, durable
+storage, snapshot transfer, proposal correlation, Multi-Raft scheduling, and
+group lifecycle. ADR 0033 accepts that ownership; it does not attribute those
+capabilities to the library.
 
-- supported release and maintenance health;
-- required group density and startup behavior;
-- durable acknowledgement semantics under the selected LogDB configuration;
-- multi-volume placement;
-- bounded transport and proposal queues;
-- snapshot cancellation, retry, and recovery;
-- membership and learner behavior required by RFC-104;
-- fault injection without library forks.
+### 12.3 Rejected target alternatives
 
-### 12.3 Alternatives
-
-`etcd/raft` is the main alternative. It provides a stable deterministic
-consensus core, but the project would own network transport, durable storage,
-snapshot transfer, Multi-Raft scheduling, and group lifecycle. HashiCorp Raft is
-mature but must prove high-density shared-resource operation. A custom Raft
-implementation is rejected for the first real system because consensus
-correctness would dominate queue development.
+Dragonboat remains useful experimental evidence but its required v4 line is
+still marked unstable upstream. HashiCorp Raft must prove high-density shared
+resource operation and does not remove the target host-density concern. A
+custom Raft algorithm is rejected because consensus correctness would dominate
+queue development.
 
 ## 13. Commit and durability model
 
 For replication factor three, a command commits after the leader has the entry
 and one follower acknowledgement that satisfies the configured durable-log
-contract. The exact Dragonboat completion callback used by the adapter must be
-verified against source, documentation, and crash tests.
+contract. A successful `RawNode.Propose` call is not completion. The adapter
+correlates the command with a committed entry and responds only after ordered
+state-machine apply produces its result.
 
 ```text
 proposed
@@ -455,7 +449,7 @@ Raft hard state
   = recoverable replica
 ```
 
-The queue must not maintain a second application WAL beside the Raft LogDB for
+The queue must not maintain a second application WAL beside the Raft WAL for
 the same commands. Two logs would create an ambiguous recovery authority.
 
 ### 14.2 Stable volume binding
@@ -496,16 +490,12 @@ The manifest records lineage, Raft group ID, replica ID, volume ID, format
 version, and last clean shutdown marker. Moving a directory does not silently
 change its volume identity.
 
-### 14.3 Default LogDB versus custom multiplexed WAL
+### 14.3 Project-owned multiplexed Raft WAL
 
-A multiplexed WAL is an optimization, not a prerequisite for correctness.
-Dragonboat's default LogDB already multiplexes Raft groups. The storage proof of
-concept compares:
-
-1. supported default LogDB configuration;
-2. one runtime boundary per volume where supported;
-3. a custom volume-aware `ILogDB` only if the default cannot satisfy placement,
-   isolation, recovery, or throughput requirements.
+Because etcd/raft deliberately supplies no disk I/O, the host owns a
+volume-aware durable store. The first correctness slice is single-group. A
+later measured slice multiplexes groups per volume and batches their appends
+into one sync without weakening per-group ordering or completion.
 
 A custom multiplexed WAL is accepted only if it provides:
 
@@ -518,8 +508,9 @@ A custom multiplexed WAL is accepted only if it provides:
 - safe segment reclamation with all referenced groups accounted for;
 - recovery time that does not scale unacceptably with unrelated groups.
 
-No wire or disk frame format is standardized before the winning LogDB path is
-selected.
+The frame format is selected only after the single-group correctness slice
+proves recovery and completion semantics and a benchmark identifies the batch
+and lookup requirements for multi-group storage.
 
 ## 15. State storage and snapshots
 
@@ -570,7 +561,7 @@ flowchart TD
     Snapshot{Valid snapshot present?}
     Restore[Restore snapshot]
     Replay[Replay committed suffix in order]
-    Join[Join NodeHost as follower]
+    Join[Join Multi-Raft host as follower]
     Ready[Publish observed readiness]
     Fail[Quarantine and report failure]
 
@@ -613,7 +604,7 @@ The queue node shares bounded resources across groups:
 - peer connections and replication streams;
 - Raft execution workers;
 - proposal and apply workers;
-- LogDB and sync workers;
+- Raft WAL and sync workers;
 - snapshot and recovery pools;
 - per-volume I/O permits;
 - tenant and group admission budgets.
@@ -622,7 +613,7 @@ The design prohibits one unbounded goroutine, timer, connection pool, or metric
 label set per group. Goroutines are cheap, not free.
 
 Group commit may combine entries from multiple groups in one physical sync only
-when the LogDB preserves each group's ordering and reports completion correctly.
+when the Raft store preserves each group's ordering and reports completion correctly.
 A sync failure fails every dependent completion and poisons or quarantines the
 affected writer until recovery proves a safe append boundary.
 
@@ -645,7 +636,7 @@ Admission control starts at the gateway and is repeated at the queue node becaus
 gateways are not a trust or capacity boundary. Scheduling accounts for both
 operations and bytes; otherwise large messages defeat request-count quotas.
 
-A hot tenant must not consume all proposal slots, LogDB batches, snapshot
+A hot tenant must not consume all proposal slots, Raft WAL batches, snapshot
 bandwidth, or recovery permits. Candidate policies include deficit round-robin
 and hierarchical token buckets. The chosen policy must preserve per-partition
 order while allowing unrelated groups to progress.
@@ -664,7 +655,7 @@ scheduler being fair.
 | Minority network partition | Majority side elects/keeps leader; minority cannot commit or claim messages |
 | Control plane unavailable | Existing groups and cached routing continue; no provisioning or membership changes |
 | Snapshot corrupt | Reject it; replay full retained history if possible, otherwise fail/quarantine replica and recover from peer |
-| Torn LogDB tail | Recover only the library-defined valid prefix; never report later entries durable |
+| Torn Raft WAL tail | Recover only the checksum-valid durable prefix; never report later entries durable |
 | Stale ACK | Conditional apply rejects old lease token/attempt |
 | Timer fires twice | Duplicate conditional expiry is a deterministic no-op |
 | One tenant overloads node | Tenant/group limits throttle it while preserving unrelated capacity |
@@ -704,16 +695,16 @@ internal/dataplane/
   domain/           queue state and deterministic commands
   application/      publish, receive, ack, nack use cases
   routing/          stable partition selection and route cache
-  consensus/        project-owned Raft port and Dragonboat adapter
-  storage/          manifests, volumes, LogDB integration, snapshots
+  consensus/        project-owned Raft port and etcd/raft adapter
+  storage/          manifests, volumes, Raft WAL, hard state, snapshots
   runtime/          group registry, lifecycle, admission, scheduling
   transport/        public API and peer security integration
 ```
 
-The domain package imports neither Dragonboat nor etcd. A narrow consensus port
-owns proposal, query, membership, snapshot, and status translation. This permits
-fault tests and a future consensus-library replacement without rewriting queue
-semantics.
+The domain package imports neither etcd/raft nor etcd clients. A narrow
+consensus port owns proposal, query, membership, snapshot, and status
+translation. This permits fault tests and a future consensus-library
+replacement without rewriting queue semantics.
 
 The Java implementation is a temporary semantic oracle. Language-neutral golden
 command histories compare Java results with Go results. Binary WAL and snapshot
@@ -728,7 +719,7 @@ Required metrics include:
 - commit index minus applied index;
 - follower match and durable lag;
 - pending commands/bytes by tenant, group, peer, and volume;
-- LogDB append, sync, batch size, and failure counts;
+- Raft WAL append, sync, batch size, and failure counts;
 - election, leadership transfer, and `NOT_LEADER` counts;
 - snapshot duration, bytes, failures, and install interference;
 - recovery queue depth and time-to-ready;
@@ -752,7 +743,7 @@ The benchmark matrix includes:
 - 1 B, 1 KiB, 64 KiB, and maximum supported payloads;
 - replication factors one and three where semantically allowed;
 - sync every entry versus supported group commit;
-- default Dragonboat LogDB versus any proposed custom LogDB;
+- single-group Raft WAL versus the measured multiplexed and group-commit design;
 - 1, 4, and representative maximum volume counts;
 - publish, receive/claim, ACK, NACK, and mixed lifecycle workloads;
 - snapshots, follower catch-up, and node restart during foreground traffic;
@@ -777,16 +768,16 @@ The data-plane design is accepted only after tests demonstrate:
 8. node, disk, and network failures preserve Raft safety;
 9. control-plane loss does not stop existing quorate partitions;
 10. all queues, bytes, goroutines, RPCs, snapshots, and recovery paths are bounded;
-11. Dragonboat meets group-density and multi-volume requirements without an
-    unsafe fork, or the design records another selection;
+11. the project-owned etcd/raft host meets group-density and multi-volume
+    requirements without weakening the Ready persistence contract;
 12. Go state-machine results match the language-neutral semantic corpus derived
     from the current Java behavior and reviewed semantics.
 
 ## 26. Open decisions
 
-1. Which supported Dragonboat release is acceptable for a long-lived project?
-2. Does the default LogDB satisfy multi-volume placement and failure isolation,
-   or is a custom `ILogDB` justified?
+1. Which WAL index and segment layout best supports per-volume group commit and
+   bounded recovery?
+2. What batch policy balances fsync amortization, fairness, and publish p99?
 3. Which state backend holds large live payload sets while preserving snapshot
    and replay invariants?
 4. What precise sync configuration proves majority-durable acknowledgement?
@@ -804,6 +795,7 @@ The data-plane design is accepted only after tests demonstrate:
 - [Partition model](../architecture/appendix-a-partition-model.md)
 - [Replication protocol](../architecture/appendix-b-replication-protocol.md)
 - [Group commit and durability](../architecture/appendix-c-group-commit-and-durability.md)
+- [ADR 0033: etcd/raft core and owned host](../adr/0033-accept-etcd-raft-core.md)
 - [Dragonboat](https://github.com/lni/dragonboat)
 - [Dragonboat storage](https://github.com/lni/dragonboat/blob/master/docs/storage.md)
 - [etcd Raft library](https://github.com/etcd-io/raft)

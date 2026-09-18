@@ -33,6 +33,11 @@ Milestone-specific designs:
   executable evidence, failed supportability gate, and the next decision point.
 - [G1 Dragonboat proof results](../benchmarks/g1-dragonboat-v4/README.md) —
   reproducible functional and proposal-baseline evidence with explicit limits.
+- [ADR 0033: accept etcd/raft core](../adr/0033-accept-etcd-raft-core.md) —
+  supported consensus core selection and explicit ownership of the durable
+  Multi-Raft host.
+- [G1.1 etcd/raft core baseline](../benchmarks/g1.1-etcd-raft-core/README.md) —
+  deterministic conformance proof and lower-bound 1,000-core measurements.
 - [ADR 0032: experimental G2 replicated partition](../adr/0032-experimental-g2-replicated-partition.md)
   — real queue/Raft integration without weakening the G1 approval boundary.
 - [G2 experimental cluster runbook](../runbooks/g2-experimental-cluster.md) —

@@ -188,7 +188,7 @@ docker compose -f compose.go.yaml exec etcd \
   /usr/local/bin/etcdctl get /dq/v1/projections/current/queues/ --prefix
 ```
 
-Run Go checks with Go 1.25:
+Run Go checks with Go 1.27.1:
 
 ```bash
 go test ./...

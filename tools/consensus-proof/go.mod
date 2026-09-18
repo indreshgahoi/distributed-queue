@@ -1,10 +1,11 @@
 module github.com/indreshgahoi/distributed-queue/tools/consensus-proof
 
-go 1.25.0
+go 1.27.1
 
-require github.com/lni/dragonboat/v4 v4.0.0-20250723143628-076c7f6497dc
-
-require github.com/indreshgahoi/distributed-queue v0.0.0
+require (
+	github.com/indreshgahoi/distributed-queue v0.0.0
+	github.com/lni/dragonboat/v4 v4.0.0-20250723143628-076c7f6497dc
+)
 
 replace github.com/indreshgahoi/distributed-queue => ../..
 

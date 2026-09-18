@@ -54,21 +54,51 @@ approval work remains intentionally unresolved. See
 
 ### G1.1 — Resolve the consensus implementation
 
+Status: complete as an architecture and dependency decision. ADR 0033 accepts
+`go.etcd.io/raft/v3 v3.7.0` as the consensus core and makes the durable
+Multi-Raft host a project-owned subsystem.
+
 Limitation solved: G1 proved the architecture boundary but found no approved
 production consensus dependency, so G2 still has no supported commit authority.
 
-- re-evaluate Dragonboat when a supported v4 release and upgrade policy exist,
-  or evaluate another candidate against the same gate;
-- price the storage, transport, snapshot, and Multi-Raft host work explicitly
-  for consensus-core-only candidates;
-- complete density, multi-volume, power-loss, snapshot-install, and sustained
-  workload evidence before approval;
-- record exactly one accepted dependency decision before starting G2.
+- Dragonboat v4 remains deferred while upstream labels it unstable;
+- the accepted etcd/raft core is pinned and exercised in an isolated proof;
+- persistence-before-send, committed-only apply, quorum loss, and restart
+  behavior are executable;
+- the storage, transport, snapshot, proposal-tracking, and scheduler work is
+  explicitly owned rather than attributed to the library;
+- complete-host density, multi-volume, power-loss, snapshot-install, and
+  sustained-workload evidence remains mandatory before production promotion.
+
+Evidence: [ADR 0033](adr/0033-accept-etcd-raft-core.md), the
+[executable proof](../tools/etcd-raft-proof/README.md), and the
+[G1.1 baseline](benchmarks/g1.1-etcd-raft-core/README.md).
+
+### G2.1 — Durable single-group etcd/raft host
+
+Status: next implementation slice.
+
+Limitation solved: accepting a consensus algorithm does not provide a durable
+queue replica. The host must correctly join disk, network, apply, and client
+completion around `RawNode`.
+
+- persist hard state and log entries before dependent Raft messages;
+- implement checksummed frames and torn-tail recovery;
+- honor `Ready.MustSync` and poison the writer after uncertain append failure;
+- correlate a command ID through committed state-machine apply;
+- recover snapshot plus retained log without exposing an uncommitted suffix;
+- test restart, disk full, partial append, quorum loss, and ambiguous client
+  response boundaries;
+- benchmark force-per-entry before selecting group-commit policy.
+
+Exit evidence: one three-replica queue partition uses the supported core and
+project-owned durable host; acknowledged commands survive one replica failure
+and restart under the documented filesystem assumptions.
 
 ### G2 — One real replicated partition
 
-Status: implemented as isolated experimental evidence; production promotion is
-blocked by G1.1 and the explicit non-guarantees in ADR 0032.
+Status: implemented as isolated Dragonboat evidence. It supplies semantic and
+failure acceptance cases for G2.1, but is not the production implementation.
 
 Limitation solved: current Go operations cross only a local test adapter.
 

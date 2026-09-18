@@ -17,9 +17,10 @@ placement, plus the first Go target-runtime foundation.
 **Target architecture implementation:** Go control-plane and deterministic
 data-plane foundations. PostgreSQL commits queue metadata and an append-only
 outbox atomically; a logical-replication projector publishes monotonic desired
-state to etcd without polling. The first Dragonboat v4 dependency gate is
-complete and deferred. Multi-Raft queue integration now exists only in an
-isolated experimental module; it is not part of the production runtime.
+state to etcd without polling. Dragonboat v4 was evaluated and deferred;
+`etcd/raft v3.7.0` is now the accepted consensus core. The project-owned
+durable host around that core is the next implementation boundary, so the
+experimental replicated queue is not yet part of the production runtime.
 
 The [v0.29 HLD](docs/design/v0.29-replica-membership-hld.md),
 [LLD](docs/design/v0.29-replica-membership-lld.md), and
@@ -77,12 +78,18 @@ complete, durable replica set before automatic replication is introduced.
 - runnable three-node queue cluster with publish, receive, ACK, and NACK;
 - tested majority loss, leader failover, idempotent ambiguous retry, and
   snapshot-plus-log restart.
+- isolated, exact `etcd/raft v3.7.0` core proof;
+- executable `Ready` ordering, quorum-loss, snapshot/restart, and convergence
+  tests for the accepted core;
+- checked-in 1,000-local-core construction and allocation baseline.
 
 This evidence does not make Dragonboat a production dependency. The evaluated
 v4 line is still development code and is deferred by
 [ADR 0031](docs/adr/0031-defer-dragonboat-v4.md). The G2 implementation remains
 isolated under that boundary by
-[ADR 0032](docs/adr/0032-experimental-g2-replicated-partition.md).
+[ADR 0032](docs/adr/0032-experimental-g2-replicated-partition.md). The target
+direction is now [ADR 0033](docs/adr/0033-accept-etcd-raft-core.md): use the
+maintained etcd/raft algorithm and explicitly own the Multi-Raft host.
 
 ## What is not guaranteed yet
 
@@ -92,7 +99,7 @@ isolated under that boundary by
 - no automatic follower promotion or divergent-log repair;
 - no snapshot transfer between nodes;
 - no multi-partition customer queue;
-- no approved multi-Raft adapter in the root production Go module;
+- no durable etcd/raft host in the root production Go module;
 - no Go gateway or revision-safe etcd watch consumer yet;
 - internal service endpoints are not authenticated;
 - no claim of production availability, security, or operational maturity.
@@ -145,13 +152,13 @@ Multi-Raft runtime, shared transport, and volume-aware durable storage.
 ```
 
 The target runtime is being built in Go behind a project-owned consensus port.
-Dragonboat is the leading Multi-Raft candidate, but it is not yet an accepted
-or integrated dependency. It must first pass the release-support, durability,
-snapshot, recovery, storage, and group-density gates in
-[ADR 0030](docs/adr/0030-go-target-runtime-and-consensus-gate.md). The project
-will not implement a custom Raft algorithm. The first pinned v4 evaluation
-passed its narrow functional proof but failed the mandatory supportability
-gate; [ADR 0031](docs/adr/0031-defer-dragonboat-v4.md) records the defer decision.
+[ADR 0033](docs/adr/0033-accept-etcd-raft-core.md) accepts the maintained
+`etcd/raft v3.7.0` consensus core. The project will not implement the Raft
+algorithm, but it will own the durable WAL, peer transport, snapshot transfer,
+proposal tracking, and bounded Multi-Raft scheduler around the core. The first
+pinned Dragonboat v4 evaluation remains useful historical evidence; it failed
+the mandatory release-support gate recorded by
+[ADR 0031](docs/adr/0031-defer-dragonboat-v4.md).
 
 Detailed designs:
 
@@ -162,10 +169,11 @@ Detailed designs:
 
 ### Current implementation
 
-Today, only the solid PostgreSQL-to-etcd control-plane path and the
-deterministic Go state machine exist from the target diagram. The Raft links,
-Go queue nodes, and Go gateway are future work. The local consensus adapter is
-a test seam and provides no distributed guarantee.
+Today, the PostgreSQL-to-etcd control-plane path, deterministic Go state
+machine, and isolated consensus proofs exist from the target diagram. The
+production etcd/raft host, automatic provisioning, and Go gateway are future
+work. The root local consensus adapter is a test seam and provides no
+distributed guarantee.
 
 The currently runnable Java baseline is:
 
@@ -235,23 +243,22 @@ curl --request POST \
 
 ## Current milestone
 
-G1 evaluated an exact Dragonboat v4 development revision without contaminating
-the production Go module. Its three-replica apply, quorum-loss, snapshot, and
-restart proofs pass, and a local proposal baseline is recorded. The candidate
-is not approved because the required v4 line is not a supported stable release;
-power-loss durability, snapshot transfer, stable multi-volume binding, and
-high-density behavior therefore remain unresolved rather than assumed.
+G1.1 accepts the maintained `etcd/raft v3.7.0` algorithm core and explicitly
+prices the storage, transport, snapshot, proposal, and scheduling layers the
+project must own. Its deterministic proof covers commit/apply distinction,
+quorum loss, snapshot/restart, and a lower-bound 1,000-core allocation baseline.
 
-G2 now supplies experimental evidence for a real three-replica queue partition:
+The earlier G2 work supplies experimental evidence for a real three-replica
+queue partition:
 the domain lifecycle crosses Raft, acknowledged state survives leader loss,
 quorum loss fails closed, snapshots restore, and three runnable node processes
 elect and replace a leader. It remains outside the production module because
-Dragonboat v4 is not approved.
+it uses the deferred Dragonboat adapter.
 
-The next milestone is still G1.1: resolve the consensus implementation by
-re-running the complete gate against a supported Dragonboat v4 release or
-evaluating an alternative with the full Multi-Raft host cost included. Only
-then can the G2 adapter be promoted into the production Go queue node.
+The next implementation slice is a durable single-group etcd/raft host. It
+must persist hard state and entries before sending dependent messages, correlate
+proposals through committed apply, recover torn tails, and fail closed on disk
+errors. Multi-group multiplexing follows only after this boundary is proven.
 
 ## Roadmap
 
@@ -260,9 +267,9 @@ v0.29  replica membership + Go control-plane/state-machine foundation
   ↓
 G1 pinned Dragonboat v4 proof → deferred at supportability gate
   ↓
-G1.1 supported consensus implementation decision
+G1.1 etcd/raft v3.7.0 core accepted; owned host boundary defined
   ↓
-promote the proven G2 replicated partition into the production queue node
+durable single-group etcd/raft host and production queue adapter
   ↓
 multi-group hosting, stable volume binding, and snapshots
   ↓
@@ -294,6 +301,8 @@ The detailed phases and issue-ready backlog are in the
 | [Delivery plan](docs/distributed-queue-delivery-plan.md) | Milestones and implementation order |
 | [G1 decision](docs/adr/0031-defer-dragonboat-v4.md) | Why the evaluated Dragonboat v4 revision is deferred |
 | [G1 evidence](docs/benchmarks/g1-dragonboat-v4/README.md) | Reproducible proof and benchmark results |
+| [G1.1 decision](docs/adr/0033-accept-etcd-raft-core.md) | Why etcd/raft is accepted and which host layers the project owns |
+| [G1.1 evidence](docs/benchmarks/g1.1-etcd-raft-core/README.md) | Core conformance and 1,000-instance lower-bound baseline |
 | [Experimental G2 decision](docs/adr/0032-experimental-g2-replicated-partition.md) | Queue/Raft integration boundary and non-guarantees |
 | [Experimental G2 runbook](docs/runbooks/g2-experimental-cluster.md) | Run and fail over the three-node replicated partition |
 | [G2 provisioning and replication diagrams](docs/diagrams/g2-provisioning-and-replication.md) | Code flow, Raft replication, and the pending automatic provisioning path |

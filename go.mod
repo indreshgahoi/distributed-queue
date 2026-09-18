@@ -1,6 +1,6 @@
 module github.com/indreshgahoi/distributed-queue
 
-go 1.25.0
+go 1.27.1
 
 require (
 	github.com/jackc/pglogrepl v0.0.0-20260824121319-4ae5c490f7ce
