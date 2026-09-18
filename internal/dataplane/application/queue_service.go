@@ -47,10 +47,10 @@ func NewQueueService(group consensus.Group, signer *receipt.Signer, ids IDSource
 }
 
 type Delivery struct {
-	MessageID     string
-	Payload       []byte
-	ReceiptHandle string
-	Attempt       int
+	MessageID     string `json:"messageId"`
+	Payload       []byte `json:"payload"`
+	ReceiptHandle string `json:"receiptHandle"`
+	Attempt       int    `json:"attempt"`
 }
 
 func (s *QueueService) Publish(ctx context.Context, payload []byte, producerRequestID string) (domain.Result, error) {

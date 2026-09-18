@@ -9,6 +9,9 @@ For the complete learning-oriented design, start with the
 - [Distributed target architecture](distributed-target-architecture.md) —
   target control/data-plane boundary, multi-tenant node layout, replica state,
   and partition-level node-failure recovery.
+- [G2 provisioning and replication](g2-provisioning-and-replication.md) — code
+  map, Raft publish/receive flows, current manual boundary, and the target
+  automatic queue-provisioning sequence.
 
 - [Provisioning claim sequence](provisioning-claim-sequence.md) — interactions
   between the queue node, metadata service, PostgreSQL, and local WAL storage.

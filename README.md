@@ -18,7 +18,8 @@ placement, plus the first Go target-runtime foundation.
 data-plane foundations. PostgreSQL commits queue metadata and an append-only
 outbox atomically; a logical-replication projector publishes monotonic desired
 state to etcd without polling. The first Dragonboat v4 dependency gate is
-complete and deferred; Multi-Raft integration is not implemented yet.
+complete and deferred. Multi-Raft queue integration now exists only in an
+isolated experimental module; it is not part of the production runtime.
 
 The [v0.29 HLD](docs/design/v0.29-replica-membership-hld.md),
 [LLD](docs/design/v0.29-replica-membership-lld.md), and
@@ -70,26 +71,35 @@ complete, durable replica set before automatic replication is introduced.
 - real three-replica leader election and deterministic apply result;
 - rejection of proposals after quorum loss;
 - local snapshot, close, restart, and state restoration proof;
-- checked-in three-sample synchronous proposal benchmark.
+- checked-in three-sample synchronous proposal benchmark;
+- experimental Dragonboat adapter for the real deterministic queue state
+  machine behind `consensus.Group`;
+- runnable three-node queue cluster with publish, receive, ACK, and NACK;
+- tested majority loss, leader failover, idempotent ambiguous retry, and
+  snapshot-plus-log restart.
 
 This evidence does not make Dragonboat a production dependency. The evaluated
 v4 line is still development code and is deferred by
-[ADR 0031](docs/adr/0031-defer-dragonboat-v4.md).
+[ADR 0031](docs/adr/0031-defer-dragonboat-v4.md). The G2 implementation remains
+isolated under that boundary by
+[ADR 0032](docs/adr/0032-experimental-g2-replicated-partition.md).
 
 ## What is not guaranteed yet
 
 - no automatic replication scheduler or follower catch-up loop;
-- no majority-quorum acknowledgement;
-- no node-coordinated leader election;
+- no production-approved majority-quorum acknowledgement;
+- no production-integrated node-coordinated leader election;
 - no automatic follower promotion or divergent-log repair;
 - no snapshot transfer between nodes;
 - no multi-partition customer queue;
-- no Go multi-Raft adapter or replicated Go queue node yet;
+- no approved multi-Raft adapter in the root production Go module;
 - no Go gateway or revision-safe etcd watch consumer yet;
 - internal service endpoints are not authenticated;
 - no claim of production availability, security, or operational maturity.
 
-A follower copy is durable local storage, but it is not yet a committed replica.
+In the Java baseline, a follower copy is durable local storage but is not a
+committed replica. The experimental G2 path uses Raft quorum, subject to its
+explicit dependency and durability non-guarantees.
 
 ## Architecture
 
@@ -232,10 +242,16 @@ is not approved because the required v4 line is not a supported stable release;
 power-loss durability, snapshot transfer, stable multi-volume binding, and
 high-density behavior therefore remain unresolved rather than assumed.
 
-The next milestone is G1.1: resolve the consensus implementation by either
+G2 now supplies experimental evidence for a real three-replica queue partition:
+the domain lifecycle crosses Raft, acknowledged state survives leader loss,
+quorum loss fails closed, snapshots restore, and three runnable node processes
+elect and replace a leader. It remains outside the production module because
+Dragonboat v4 is not approved.
+
+The next milestone is still G1.1: resolve the consensus implementation by
 re-running the complete gate against a supported Dragonboat v4 release or
-evaluating an alternative with the full Multi-Raft host cost included. G2, the
-first real replicated queue partition, begins only after one candidate passes.
+evaluating an alternative with the full Multi-Raft host cost included. Only
+then can the G2 adapter be promoted into the production Go queue node.
 
 ## Roadmap
 
@@ -246,7 +262,7 @@ G1 pinned Dragonboat v4 proof → deferred at supportability gate
   ↓
 G1.1 supported consensus implementation decision
   ↓
-Go queue-node with one replicated partition
+promote the proven G2 replicated partition into the production queue node
   ↓
 multi-group hosting, stable volume binding, and snapshots
   ↓
@@ -278,6 +294,10 @@ The detailed phases and issue-ready backlog are in the
 | [Delivery plan](docs/distributed-queue-delivery-plan.md) | Milestones and implementation order |
 | [G1 decision](docs/adr/0031-defer-dragonboat-v4.md) | Why the evaluated Dragonboat v4 revision is deferred |
 | [G1 evidence](docs/benchmarks/g1-dragonboat-v4/README.md) | Reproducible proof and benchmark results |
+| [Experimental G2 decision](docs/adr/0032-experimental-g2-replicated-partition.md) | Queue/Raft integration boundary and non-guarantees |
+| [Experimental G2 runbook](docs/runbooks/g2-experimental-cluster.md) | Run and fail over the three-node replicated partition |
+| [G2 provisioning and replication diagrams](docs/diagrams/g2-provisioning-and-replication.md) | Code flow, Raft replication, and the pending automatic provisioning path |
+| [G2 benchmark](docs/benchmarks/g2-replicated-partition/README.md) | Replicated 1 KiB queue publish baseline |
 | [ADRs](docs/adr) | Accepted and proposed architectural decisions |
 | [Diagrams](docs/diagrams/README.md) | Runtime and protocol flows |
 | [Engineering guidelines](docs/engineering-guidelines.md) | Code, naming, testing, and logging conventions |

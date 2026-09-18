@@ -67,6 +67,9 @@ production consensus dependency, so G2 still has no supported commit authority.
 
 ### G2 — One real replicated partition
 
+Status: implemented as isolated experimental evidence; production promotion is
+blocked by G1.1 and the explicit non-guarantees in ADR 0032.
+
 Limitation solved: current Go operations cross only a local test adapter.
 
 - run one partition on three queue-node processes;
@@ -74,6 +77,14 @@ Limitation solved: current Go operations cross only a local test adapter.
 - acknowledge only the consensus adapter's documented durable completion;
 - restore from Raft snapshot plus retained log;
 - verify leader crash before and after client acknowledgement.
+
+Evidence: the adapter and runnable three-node process implement the complete
+queue lifecycle through a real Raft group. Automated tests cover convergence,
+quorum loss, idempotent retry after an ambiguous response, and snapshot plus
+log restart. A container smoke test covers leader election and failover. See
+[ADR 0032](adr/0032-experimental-g2-replicated-partition.md), the
+[runbook](runbooks/g2-experimental-cluster.md), and the
+[benchmark](benchmarks/g2-replicated-partition/README.md).
 
 ### G3 — Multi-group node runtime and control-plane watches
 

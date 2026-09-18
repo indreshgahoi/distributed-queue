@@ -1,8 +1,9 @@
 # Dragonboat v4 Dependency Proof
 
-This isolated Go module is the executable evidence for the G1 consensus-library
-gate. It is not production queue-node code and its Dragonboat dependency must
-not be copied into the root module while ADR 0031 remains deferred.
+This isolated Go module contains the executable evidence for the G1
+consensus-library gate and the experimental G2 replicated queue partition. It
+is not production queue-node code and its Dragonboat dependency must not be
+copied into the root module while ADR 0031 remains deferred.
 
 The proof pins this exact module version:
 
@@ -19,9 +20,23 @@ It exercises a real three-replica group over localhost and verifies:
 - snapshot creation followed by full process-level host close and restart
   reconstructs the applied state.
 
-It deliberately uses a tiny counter state machine. Queue commands remain behind
-the root module's project-owned `consensus.Group` boundary and are not coupled
-to Dragonboat by this experiment.
+The `proof` package deliberately uses a tiny counter state machine. The
+`queuegroup` package then adapts the real deterministic queue domain through
+the project-owned `consensus.Group` interface without leaking Dragonboat types
+into the domain.
+
+## Experimental G2 cluster
+
+The module also provides:
+
+- a Dragonboat-backed `consensus.Group` adapter;
+- three-replica queue lifecycle and recovery tests;
+- leader-loss and ambiguous-response retry tests;
+- a runnable queue-node HTTP process;
+- a three-node `compose.g2.yaml` topology.
+
+See the [G2 runbook](../../docs/runbooks/g2-experimental-cluster.md). This is
+integration evidence, not a reversal of ADR 0031.
 
 ## Run
 
@@ -43,8 +58,8 @@ production throughput claim.
 
 ## Deliberate limits
 
-This proof does not establish power-loss durability, torn-write repair,
-snapshot transfer, stable per-volume group placement, or high group density.
+This module does not establish power-loss durability, torn-write repair,
+snapshot transfer, stable multi-volume group placement, or high group density.
 Those expensive gates were not treated as passed after the candidate failed
 the earlier supportability gate. See
 [ADR 0031](../../docs/adr/0031-defer-dragonboat-v4.md) and the checked-in

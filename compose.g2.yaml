@@ -1,0 +1,52 @@
+name: distributed-queue-g2-experimental
+
+x-queue-node: &queue-node
+  build:
+    context: .
+    dockerfile: tools/consensus-proof/Dockerfile
+  restart: unless-stopped
+
+services:
+  queue-node-1:
+    <<: *queue-node
+    command:
+      - --replica-id=1
+      - --raft-address=queue-node-1:63001
+      - --http-address=:8080
+      - --storage-root=/var/lib/distributed-queue
+      - --members=1=queue-node-1:63001,2=queue-node-2:63001,3=queue-node-3:63001
+    ports:
+      - "18101:8080"
+    volumes:
+      - g2-node-1:/var/lib/distributed-queue
+
+  queue-node-2:
+    <<: *queue-node
+    command:
+      - --replica-id=2
+      - --raft-address=queue-node-2:63001
+      - --http-address=:8080
+      - --storage-root=/var/lib/distributed-queue
+      - --members=1=queue-node-1:63001,2=queue-node-2:63001,3=queue-node-3:63001
+    ports:
+      - "18102:8080"
+    volumes:
+      - g2-node-2:/var/lib/distributed-queue
+
+  queue-node-3:
+    <<: *queue-node
+    command:
+      - --replica-id=3
+      - --raft-address=queue-node-3:63001
+      - --http-address=:8080
+      - --storage-root=/var/lib/distributed-queue
+      - --members=1=queue-node-1:63001,2=queue-node-2:63001,3=queue-node-3:63001
+    ports:
+      - "18103:8080"
+    volumes:
+      - g2-node-3:/var/lib/distributed-queue
+
+volumes:
+  g2-node-1:
+  g2-node-2:
+  g2-node-3:

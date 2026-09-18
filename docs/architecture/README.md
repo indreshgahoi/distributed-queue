@@ -33,6 +33,10 @@ Milestone-specific designs:
   executable evidence, failed supportability gate, and the next decision point.
 - [G1 Dragonboat proof results](../benchmarks/g1-dragonboat-v4/README.md) —
   reproducible functional and proposal-baseline evidence with explicit limits.
+- [ADR 0032: experimental G2 replicated partition](../adr/0032-experimental-g2-replicated-partition.md)
+  — real queue/Raft integration without weakening the G1 approval boundary.
+- [G2 experimental cluster runbook](../runbooks/g2-experimental-cluster.md) —
+  start, exercise, fail over, restart, and reset the three-node cluster.
 - [Storage architecture](../design/storage-architecture.md) — current files,
   recovery authority, and phased evolution to replicated storage.
 - [v0.28 high-level design](../design/v0.28-durable-log-hld.md)
